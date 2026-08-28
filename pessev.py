@@ -3,16 +3,19 @@
 Usage:
     python pessev.py PESINC PESSEV [SAMPLE_COUNT] [PESSEV_SPREAD] [SEED]
 
-    PESINC         incidence as a fraction, e.g. 0.48
-    PESSEV         mean severity as a fraction over *all* samples, e.g. 0.20
+    PESINC         incidence as a percentage, e.g. 48
+    PESSEV         mean severity as a percentage over *all* samples, e.g. 20
     SAMPLE_COUNT   number of subsamples, default 200
     PESSEV_SPREAD  coefficient of variation of severity among infected samples,
-                   default 0.6. 0 = every infected sample identical, ~0.6
-                   realistic, >=1.5 heavily skewed towards mild infections.
+                   as a percentage, default 60. 0 = every infected sample
+                   identical, ~60 realistic, >=150 heavily skewed towards mild
+                   infections. A cv is a ratio, so this one may exceed 100.
     SEED           random seed, default 20260828
 
 Writes a tab separated pesinc_i / pessev_i table to stdout and a summary to
-stderr, so `python pessev.py 0.48 0.2 > out.tsv` keeps the data clean.
+stderr, so `python pessev.py 48 20 > out.tsv` keeps the data clean. Everything
+is in whole percent points: pesinc_i is a 0/1 flag and pessev_i is an integer
+severity, so a severity of 5% appears in the table as 5.
 """
 
 import itertools
@@ -20,35 +23,17 @@ import math
 import random
 import sys
 
+# whole percent points, which is also the unit the table is written in -- integer
+# severities are what lets the mean come out exact instead of drifting over a few
+# hundred float additions
 POSSIBLE_PESSEV_VALUES = [
-    0,
-    0.01,
-    0.03,
-    0.05,
-    0.1,
-    0.15,
-    0.2,
-    0.25,
-    0.30,
-    0.35,
-    0.40,
-    0.50,
-    0.60,
-    0.70,
-    0.80,
-    0.90,
-    1,
-]
-
-# every allowed value is a whole percent, so the algorithm runs on integer
-# percent points and converts back at the end -- that is what lets the mean come
-# out exact instead of drifting over a few hundred float additions
-PESSEV_SCALE = 100
+    0, 1, 3, 5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100,
+]  # fmt: skip
 
 
 def calculate_pesinc_i(sample_count, pesinc):
-    """Shuffled list of `sample_count` flags, `pesinc` of them set."""
-    samples_with_pests_count = int(sample_count * pesinc)
+    """Shuffled list of `sample_count` flags, `pesinc` percent of them set."""
+    samples_with_pests_count = int(sample_count * pesinc / 100)
     pesinc_i = [1] * samples_with_pests_count + [0] * (
         sample_count - samples_with_pests_count
     )
@@ -113,15 +98,14 @@ def _match_target_sum(values, allowed, target_sum, max_moves=4):
 def calculate_pessev_i(
     pesinc_i, pessev, spread, possible_values=POSSIBLE_PESSEV_VALUES
 ):
-    """Severity per subsample, averaging exactly `pessev` over the whole list.
+    """Severity per subsample, averaging exactly `pessev` percent over the list.
 
-    Zero wherever pesinc_i is zero, non-zero wherever it is one.
+    Zero wherever pesinc_i is zero, non-zero wherever it is one. `spread` is a
+    coefficient of variation in percent, i.e. 60 means a cv of 0.6.
     """
-    allowed = sorted(
-        {round(value * PESSEV_SCALE) for value in possible_values if value > 0}
-    )
+    allowed = sorted({value for value in possible_values if value > 0})
     infected = [i for i, incidence in enumerate(pesinc_i) if incidence == 1]
-    target_sum = round(pessev * len(pesinc_i) * PESSEV_SCALE)
+    target_sum = round(pessev * len(pesinc_i))
 
     # every infected sample carries at least the smallest allowed value and at
     # most the largest, which pins how low and how high the mean can reach
@@ -129,10 +113,9 @@ def calculate_pessev_i(
     highest = len(infected) * allowed[-1]
     if not lowest <= target_sum <= highest:
         raise ValueError(
-            f"PESSEV {pessev} is out of reach: {len(infected)} infected samples, each "
-            f"between {allowed[0] / PESSEV_SCALE} and {allowed[-1] / PESSEV_SCALE}, "
-            f"hold the mean between {lowest / PESSEV_SCALE / len(pesinc_i):.4f} and "
-            f"{highest / PESSEV_SCALE / len(pesinc_i):.4f}"
+            f"PESSEV {pessev:g}% is out of reach: {len(infected)} infected "
+            f"samples, each between {allowed[0]}% and {allowed[-1]}%, hold the mean "
+            f"between {lowest / len(pesinc_i):.2f}% and {highest / len(pesinc_i):.2f}%"
         )
 
     pessev_i = [0] * len(pesinc_i)
@@ -143,14 +126,15 @@ def calculate_pessev_i(
     if spread <= 0:
         draws = [mean_infected] * len(infected)
     else:
-        shape = 1 / spread**2  # a gamma with this shape has cv == spread
+        cv = spread / 100
+        shape = 1 / cv**2  # a gamma with this shape has cv == spread
         draws = [random.gammavariate(shape, mean_infected / shape) for _ in infected]
 
     values = [min(allowed, key=lambda a: (abs(a - draw), a)) for draw in draws]
     values = _match_target_sum(values, allowed, target_sum)
 
     for i, value in zip(infected, values):
-        pessev_i[i] = value / PESSEV_SCALE
+        pessev_i[i] = value
     return pessev_i
 
 
@@ -162,23 +146,25 @@ def main(argv):
         pesinc = float(argv[1])
         pessev = float(argv[2])
         sample_count = int(argv[3]) if len(argv) > 3 else 200
-        spread = float(argv[4]) if len(argv) > 4 else 0.6
+        spread = float(argv[4]) if len(argv) > 4 else 60.0
         seed = int(argv[5]) if len(argv) > 5 else 20260828
     except ValueError as error:
         sys.exit(f"could not read the arguments: {error}")
 
-    if not 0 <= pesinc <= 1 or not 0 <= pessev <= 1:
-        sys.exit("PESINC and PESSEV are fractions and must lie between 0 and 1")
+    if not 0 <= pesinc <= 100 or not 0 <= pessev <= 100:
+        sys.exit("PESINC and PESSEV are percentages and must lie between 0 and 100")
     if sample_count < 1:
         sys.exit("SAMPLE_COUNT must be at least 1")
     if spread < 0:
         sys.exit("PESSEV_SPREAD cannot be negative")
 
-    target_sum = pessev * sample_count * PESSEV_SCALE
+    # the algorithm distributes whole percent points, so the requested mean has
+    # to land on an integer number of them
+    target_sum = pessev * sample_count
     if not math.isclose(target_sum, round(target_sum)):
         sys.exit(
-            f"PESSEV * SAMPLE_COUNT * {PESSEV_SCALE} = {target_sum} is not a "
-            f"whole number of percent points, so the mean cannot be matched"
+            f"PESSEV * SAMPLE_COUNT = {target_sum} is not a whole number of "
+            f"percent points, so the mean cannot be matched"
         )
 
     random.seed(a=seed)
@@ -196,33 +182,29 @@ def main(argv):
     for incidence, severity in zip(pesinc_i, pessev_i):
         print(f"{incidence}\t{severity}")
 
-    # sum the integer percent points rather than the fractions, so the reported
-    # mean is not blurred by float addition
     infected = [severity for severity in pessev_i if severity > 0]
-    achieved = (
-        sum(round(s * PESSEV_SCALE) for s in pessev_i) / PESSEV_SCALE / sample_count
-    )
+    achieved = sum(pessev_i) / sample_count
     print(f"infected samples : {len(infected)} of {sample_count}", file=sys.stderr)
     print(
-        f"mean severity    : {achieved:.6f} (target {pessev:.6f}, "
-        f"off by {achieved - pessev:+.6f})",
+        f"mean severity    : {achieved:.4f}% (target {pessev:.4f}%, "
+        f"off by {achieved - pessev:+.4f})",
         file=sys.stderr,
     )
     if not infected:
         return pesinc_i, pessev_i
 
-    mean_infected = (
-        sum(round(s * PESSEV_SCALE) for s in infected) / PESSEV_SCALE / len(infected)
-    )
     # PESSEV / PESINC is only reachable when PESINC * SAMPLE_COUNT is whole,
     # otherwise the infected count is truncated and the two disagree slightly
     print(
-        f"mean on infected : {mean_infected:.6f} (target {pessev / pesinc:.6f})",
+        f"mean on infected : {sum(infected) / len(infected):.4f}% "
+        f"(target {pessev / pesinc * 100:.4f}%)",
         file=sys.stderr,
     )
-    print(f"severity spread  : {min(infected)} .. {max(infected)}", file=sys.stderr)
+    print(
+        f"severity spread  : {min(infected)}% .. {max(infected)}%", file=sys.stderr
+    )
     for value in sorted(set(infected)):
-        print(f"  {value:<5} {infected.count(value):>4}", file=sys.stderr)
+        print(f"  {value:>3}% {infected.count(value):>4}", file=sys.stderr)
 
     # the CLI ignores this, but the web page copies the columns from it instead
     # of parsing its own stdout back out of the DOM
