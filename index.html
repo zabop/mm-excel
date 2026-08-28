@@ -167,10 +167,18 @@
         <div class="stdout-header">📊 Data (stdout - TSV)</div>
         <pre id="stdoutView">Output data will appear here...</pre>
         <div class="copy-buttons">
-          <button type="button" id="copyPesincBtn" onclick="copyColumn(0, this)">
+          <button
+            type="button"
+            id="copyPesincBtn"
+            onclick="copyColumn('pesinc_i', this)"
+          >
             Copy pesinc_i
           </button>
-          <button type="button" id="copyPessevBtn" onclick="copyColumn(1, this)">
+          <button
+            type="button"
+            id="copyPessevBtn"
+            onclick="copyColumn('pessev_i', this)"
+          >
             Copy pessev_i
           </button>
         </div>
@@ -184,6 +192,10 @@
     <script type="text/javascript">
       let pyodideInstance = null;
       let pythonCodeText = "";
+      // Columns of the last run, straight from Python. Kept as arrays because
+      // the stdout <pre> is not a usable source: assigning innerText turns the
+      // newlines into <br> elements, so the TSV rows cannot be read back.
+      let lastColumns = { pesinc_i: [], pessev_i: [] };
 
       // Automatically calculate and set the seed default to YYYYMMDD string format
       const today = new Date();
@@ -219,6 +231,7 @@
       async function runGenerator(event) {
         event.preventDefault();
 
+        lastColumns = { pesinc_i: [], pessev_i: [] };
         document.getElementById("stdoutView").innerText =
           "Processing calculation...";
         document.getElementById("stderrView").innerText =
@@ -258,18 +271,25 @@
 
           // Not indented: runPythonAsync hands the string straight to Python,
           // so any leading whitespace is an IndentationError.
-          await pyodideInstance.runPythonAsync(
+          const resultProxy = await pyodideInstance.runPythonAsync(
             [
               "import sys",
               // Its own namespace, so __name__ is not "__main__" and the
               // script's entrypoint guard does not fire during the exec
               "pessev_module = {'__name__': 'pessev'}",
               "exec(raw_script_content, pessev_module)",
-              "# Run the entrypoint function with the UI arguments",
+              "# Run the entrypoint function with the UI arguments; it returns",
+              "# the two columns as lists",
               "pessev_module['main']([str(arg) for arg in sys_argv])",
             ].join("\n"),
           );
 
+          // main() hands back (pesinc_i, pessev_i) as Python lists
+          if (resultProxy) {
+            const [pesincColumn, pessevColumn] = resultProxy.toJs();
+            resultProxy.destroy();
+            lastColumns = { pesinc_i: pesincColumn, pessev_i: pessevColumn };
+          }
           document.getElementById("stdoutView").innerText =
             stdoutBuffer || "No output generated.";
           document.getElementById("stderrView").innerText =
@@ -280,26 +300,14 @@
         }
       }
 
-      // Pull one TSV column out of the stdout view, header row excluded
-      function extractColumn(columnIndex) {
-        return document
-          .getElementById("stdoutView")
-          .textContent.split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line.includes("\t"))
-          .filter((line) => !line.startsWith("pesinc_i"))
-          .map((line) => line.split("\t")[columnIndex])
-          .filter((value) => value !== undefined && value !== "")
-          .join("\n");
-      }
-
-      async function copyColumn(columnIndex, button) {
-        const values = extractColumn(columnIndex);
+      // One value per line, so a paste lands in a single spreadsheet column
+      async function copyColumn(columnName, button) {
+        const values = lastColumns[columnName].join("\n");
         const originalLabel = button.dataset.label || button.innerText.trim();
         button.dataset.label = originalLabel;
 
         if (!values) {
-          flashButton(button, "Nothing to copy");
+          flashButton(button, "Run the simulation first");
           return;
         }
 

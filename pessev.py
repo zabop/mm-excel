@@ -209,7 +209,7 @@ def main(argv):
         file=sys.stderr,
     )
     if not infected:
-        return
+        return pesinc_i, pessev_i
 
     mean_infected = (
         sum(round(s * PESSEV_SCALE) for s in infected) / PESSEV_SCALE / len(infected)
@@ -223,6 +223,10 @@ def main(argv):
     print(f"severity spread  : {min(infected)} .. {max(infected)}", file=sys.stderr)
     for value in sorted(set(infected)):
         print(f"  {value:<5} {infected.count(value):>4}", file=sys.stderr)
+
+    # the CLI ignores this, but the web page copies the columns from it instead
+    # of parsing its own stdout back out of the DOM
+    return pesinc_i, pessev_i
 
 
 if __name__ == "__main__":
