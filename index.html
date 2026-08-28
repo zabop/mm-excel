@@ -7,6 +7,11 @@
     <!-- Load Pyodide WebAssembly Framework -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.28.3/full/pyodide.js"></script>
     <style>
+      /* the page colour lives on <html>, because <body> is only 800px wide and
+         would leave the margins bare */
+      html {
+        background-color: #f9f9f9;
+      }
       body {
         font-family:
           -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -14,8 +19,21 @@
         margin: 40px auto;
         padding: 0 20px;
         line-height: 1.6;
-        background-color: #f9f9f9;
         color: #333;
+      }
+      /* Tiled wallpaper on its own layer: opacity here fades only the photo,
+         whereas a translucent background-image would fade the text with it.
+         Fixed, so the tiles cover the viewport at any scroll position. */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        background-image: url("https://kep.cdn.indexvas.hu/1/0/5013/50138/501387/50138753_f77d2991e879c056d6eef88f0961cc96_wm.jpg");
+        background-repeat: repeat;
+        background-size: 240px auto; /* source is 805x1152, so ~343px tall */
+        opacity: 0.2;
+        pointer-events: none;
       }
       h1 {
         border-bottom: 2px solid #eaeaea;
