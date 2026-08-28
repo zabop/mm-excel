@@ -20,7 +20,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Sanity check pessev.py
         run: python3 pessev.py 0.48 0.2 200 0.6 20260828 > /dev/null
@@ -34,7 +34,7 @@ jobs:
 
       # enablement: turns Pages on (source = GitHub Actions) the first time this
       # runs, instead of failing with "Get Pages site failed"
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
         with:
           enablement: true
 
