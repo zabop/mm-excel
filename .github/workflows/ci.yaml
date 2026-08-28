@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Sanity check pessev.py
-        run: python3 pessev.py 0.48 0.2 200 0.6 20260828 > /dev/null
+        run: python3 pessev.py 48 20 200 60 20260828 > /dev/null
 
       # Stage only what the page needs, so the spreadsheets and the PDF in the
       # repo do not end up on the public site
