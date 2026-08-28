@@ -1,0 +1,49 @@
+name: Deploy GitHub Page
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Allow GITHUB_TOKEN to publish to Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; let a newer push finish rather than cancelling it
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sanity check pessev.py
+        run: python3 pessev.py 0.48 0.2 200 0.6 20260828 > /dev/null
+
+      # Stage only what the page needs, so the spreadsheets and the PDF in the
+      # repo do not end up on the public site
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp index.html pessev.py _site/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
