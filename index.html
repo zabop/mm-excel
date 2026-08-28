@@ -92,6 +92,14 @@
         color: #0076ff;
         margin-bottom: 15px;
       }
+      .copy-buttons {
+        display: flex;
+        gap: 10px;
+      }
+      .copy-buttons button {
+        font-size: 14px;
+        padding: 8px 14px;
+      }
     </style>
   </head>
   <body>
@@ -158,6 +166,14 @@
       <div>
         <div class="stdout-header">📊 Data (stdout - TSV)</div>
         <pre id="stdoutView">Output data will appear here...</pre>
+        <div class="copy-buttons">
+          <button type="button" id="copyPesincBtn" onclick="copyColumn(0, this)">
+            Copy pesinc_i
+          </button>
+          <button type="button" id="copyPessevBtn" onclick="copyColumn(1, this)">
+            Copy pessev_i
+          </button>
+        </div>
       </div>
       <div>
         <div class="stderr-header">📝 Summary (stderr)</div>
@@ -262,6 +278,51 @@
           document.getElementById("stderrView").innerText =
             `Execution Interrupted:\n${error.message}`;
         }
+      }
+
+      // Pull one TSV column out of the stdout view, header row excluded
+      function extractColumn(columnIndex) {
+        return document
+          .getElementById("stdoutView")
+          .textContent.split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.includes("\t"))
+          .filter((line) => !line.startsWith("pesinc_i"))
+          .map((line) => line.split("\t")[columnIndex])
+          .filter((value) => value !== undefined && value !== "")
+          .join("\n");
+      }
+
+      async function copyColumn(columnIndex, button) {
+        const values = extractColumn(columnIndex);
+        const originalLabel = button.dataset.label || button.innerText.trim();
+        button.dataset.label = originalLabel;
+
+        if (!values) {
+          flashButton(button, "Nothing to copy");
+          return;
+        }
+
+        try {
+          await navigator.clipboard.writeText(values);
+          flashButton(button, "Copied!");
+        } catch (error) {
+          // Clipboard API is unavailable outside secure contexts
+          const scratch = document.createElement("textarea");
+          scratch.value = values;
+          document.body.appendChild(scratch);
+          scratch.select();
+          const copied = document.execCommand("copy");
+          document.body.removeChild(scratch);
+          flashButton(button, copied ? "Copied!" : "Copy failed");
+        }
+      }
+
+      function flashButton(button, message) {
+        button.innerText = message;
+        setTimeout(() => {
+          button.innerText = button.dataset.label;
+        }, 1200);
       }
 
       initEnvironment();
