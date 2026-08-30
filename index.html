@@ -182,7 +182,7 @@
     <div class="output-container">
       <div>
         <div class="stdout-header">
-          📊 Data (stdout - TSV, whole percent points)
+          📊 Data (stdout - JSON, whole percent points)
         </div>
         <pre id="stdoutView">Output data will appear here...</pre>
         <div class="copy-buttons">
@@ -203,7 +203,7 @@
         </div>
       </div>
       <div>
-        <div class="stderr-header">📝 Summary (stderr)</div>
+        <div class="stderr-header">📝 Summary (stderr - JSON)</div>
         <pre id="stderrView">Summary telemetry will appear here...</pre>
       </div>
     </div>
@@ -211,9 +211,9 @@
     <script type="text/javascript">
       let pyodideInstance = null;
       let pythonCodeText = "";
-      // Columns of the last run, straight from Python. Kept as arrays because
-      // the stdout <pre> is not a usable source: assigning innerText turns the
-      // newlines into <br> elements, so the TSV rows cannot be read back.
+      // Columns of the last run, read out of the stdout document. Kept as
+      // arrays because the stdout <pre> is not a usable source: assigning
+      // innerText turns the newlines into <br> elements.
       let lastColumns = { pesinc_i: [], pessev_i: [] };
 
       // Automatically calculate and set the seed default to YYYYMMDD string format
@@ -290,33 +290,51 @@
 
           // Not indented: runPythonAsync hands the string straight to Python,
           // so any leading whitespace is an IndentationError.
-          const resultProxy = await pyodideInstance.runPythonAsync(
+          await pyodideInstance.runPythonAsync(
             [
-              "import sys",
               // Its own namespace, so __name__ is not "__main__" and the
               // script's entrypoint guard does not fire during the exec
               "pessev_module = {'__name__': 'pessev'}",
               "exec(raw_script_content, pessev_module)",
-              "# Run the entrypoint function with the UI arguments; it returns",
-              "# the two columns as lists",
-              "pessev_module['main']([str(arg) for arg in sys_argv])",
+              "try:",
+              "    pessev_module['main']([str(arg) for arg in sys_argv])",
+              "except SystemExit:",
+              "    # fail() has already put its reason on stderr as JSON, so",
+              "    # the exit carries nothing left to report",
+              "    pass",
             ].join("\n"),
           );
 
-          // main() hands back (pesinc_i, pessev_i) as Python lists
-          if (resultProxy) {
-            const [pesincColumn, pessevColumn] = resultProxy.toJs();
-            resultProxy.destroy();
-            lastColumns = { pesinc_i: pesincColumn, pessev_i: pessevColumn };
+          // main() returns nothing; the columns come from the stdout document
+          const data = parseStream(stdoutBuffer);
+          const summary = parseStream(stderrBuffer);
+          if (data) {
+            lastColumns = { pesinc_i: data.pesinc_i, pessev_i: data.pessev_i };
           }
-          document.getElementById("stdoutView").innerText =
-            stdoutBuffer || "No output generated.";
-          document.getElementById("stderrView").innerText =
-            stderrBuffer || "No summary generated.";
+          showStream("stdoutView", stdoutBuffer, data, "No output generated.");
+          showStream("stderrView", stderrBuffer, summary, "No summary generated.");
         } catch (error) {
           document.getElementById("stderrView").innerText =
             `Execution Interrupted:\n${error.message}`;
         }
+      }
+
+      // Both streams carry exactly one JSON document. A Python traceback is
+      // not JSON, so a failed parse hands back null and the caller falls back
+      // to showing the raw text rather than throwing.
+      function parseStream(text) {
+        try {
+          return JSON.parse(text);
+        } catch (error) {
+          return null;
+        }
+      }
+
+      // Pretty printed when the stream parsed, verbatim when it did not
+      function showStream(viewId, text, parsed, emptyMessage) {
+        document.getElementById(viewId).innerText = parsed
+          ? JSON.stringify(parsed, null, 2)
+          : text || emptyMessage;
       }
 
       // One value per line, so a paste lands in a single spreadsheet column

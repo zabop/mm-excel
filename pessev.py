@@ -12,13 +12,19 @@ Usage:
                    infections. A cv is a ratio, so this one may exceed 100.
     SEED           random seed, default 20260828
 
-Writes a tab separated pesinc_i / pessev_i table to stdout and a summary to
-stderr, so `python pessev.py 48 20 > out.tsv` keeps the data clean. Everything
-is in whole percent points: pesinc_i is a 0/1 flag and pessev_i is an integer
-severity, so a severity of 5% appears in the table as 5.
+Writes one JSON document to stdout and another to stderr, so
+`python pessev.py 48 20 > out.json` keeps the data clean. stdout carries the
+data, meaning the pesinc_i and pessev_i columns and the arguments they came
+from; stderr carries the summary, meaning the counts and means that describe
+them. Everything is in whole percent points: pesinc_i is a 0/1 flag and pessev_i
+is an integer severity, so a severity of 5% appears as 5.
+
+A run that gives up writes {"error": "..."} to stderr and exits non-zero, so the
+stderr document parses whether the run succeeded or not.
 """
 
 import itertools
+import json
 import math
 import random
 import sys
@@ -29,6 +35,80 @@ import sys
 POSSIBLE_PESSEV_VALUES = [
     0, 1, 3, 5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100,
 ]  # fmt: skip
+
+
+def fail(message):
+    """Give up with a stderr document that still parses as JSON.
+
+    Every abandoned run leaves stderr holding an object rather than bare prose,
+    so a caller can read the reason the same way it reads a summary.
+    """
+    print(json.dumps({"error": message}), file=sys.stderr)
+    sys.exit(1)
+
+
+def threshold_counts(pessev_i, threshold):
+    """Severities split into unaffected / below threshold / at or above it.
+
+    The three counts partition the samples, which is why the last one asks for
+    a severity above zero as well: a threshold of 0 would otherwise sweep the
+    unaffected samples into both the first bucket and the last.
+    """
+    unaffected = sum(1 for severity in pessev_i if severity == 0)
+    below = sum(1 for severity in pessev_i if 0 < severity < threshold)
+    at_or_above = sum(
+        1 for severity in pessev_i if severity > 0 and severity >= threshold
+    )
+    return unaffected, below, at_or_above
+
+
+def summarise(pesinc, pessev, sample_count, pessev_i, threshold=None):
+    """The numbers that describe one run, rather than its samples.
+
+    Everything a stderr document says about a run is assembled here, so the
+    summary can only ever describe the pessev_i it was handed. Shared with
+    pessev_wrapper.py, which stamps an index onto each entry it collects.
+    """
+    infected = [severity for severity in pessev_i if severity > 0]
+    summary = {
+        "pesinc": pesinc,
+        "pessev": pessev,
+        "sample_count": sample_count,
+        "infected_count": len(infected),
+        "achieved_mean": sum(pessev_i) / sample_count,
+        "target_mean": pessev,
+        # filled in below, but only when there is an infected sample to
+        # describe; null rather than absent, so every entry has the same keys
+        "mean_on_infected": None,
+        "target_mean_on_infected": None,
+        "severity_min": None,
+        "severity_max": None,
+        "severity_histogram": {},
+        "threshold_counts": None,
+    }
+
+    if threshold is not None:
+        unaffected, below, at_or_above = threshold_counts(pessev_i, threshold)
+        summary["threshold_counts"] = {
+            "unaffected": unaffected,
+            "below": below,
+            "at_or_above": at_or_above,
+        }
+
+    if not infected:
+        return summary
+
+    # PESSEV / PESINC is only reachable when PESINC * SAMPLE_COUNT is whole,
+    # otherwise the infected count is truncated and the two disagree slightly
+    summary["mean_on_infected"] = sum(infected) / len(infected)
+    summary["target_mean_on_infected"] = pessev / pesinc * 100
+    summary["severity_min"] = min(infected)
+    summary["severity_max"] = max(infected)
+    # JSON object keys are strings, so the severities become strings here
+    summary["severity_histogram"] = {
+        str(value): infected.count(value) for value in sorted(set(infected))
+    }
+    return summary
 
 
 def calculate_pesinc_i(sample_count, pesinc):
@@ -140,7 +220,7 @@ def calculate_pessev_i(
 
 def main(argv):
     if not 3 <= len(argv) <= 6:
-        sys.exit(__doc__)
+        fail(__doc__)
 
     try:
         pesinc = float(argv[1])
@@ -149,20 +229,20 @@ def main(argv):
         spread = float(argv[4]) if len(argv) > 4 else 60.0
         seed = int(argv[5]) if len(argv) > 5 else None
     except ValueError as error:
-        sys.exit(f"could not read the arguments: {error}")
+        fail(f"could not read the arguments: {error}")
 
     if not 0 <= pesinc <= 100 or not 0 <= pessev <= 100:
-        sys.exit("PESINC and PESSEV are percentages and must lie between 0 and 100")
+        fail("PESINC and PESSEV are percentages and must lie between 0 and 100")
     if sample_count < 1:
-        sys.exit("SAMPLE_COUNT must be at least 1")
+        fail("SAMPLE_COUNT must be at least 1")
     if spread < 0:
-        sys.exit("PESSEV_SPREAD cannot be negative")
+        fail("PESSEV_SPREAD cannot be negative")
 
     # the algorithm distributes whole percent points, so the requested mean has
     # to land on an integer number of them
     target_sum = pessev * sample_count
     if not math.isclose(target_sum, round(target_sum)):
-        sys.exit(
+        fail(
             f"PESSEV * SAMPLE_COUNT = {target_sum} is not a whole number of "
             f"percent points, so the mean cannot be matched"
         )
@@ -173,41 +253,30 @@ def main(argv):
     try:
         pessev_i = calculate_pessev_i(pesinc_i, pessev, spread)
     except ValueError as error:
-        sys.exit(str(error))
+        fail(str(error))
 
     assert all(value in POSSIBLE_PESSEV_VALUES for value in pessev_i)
     assert all(sev == 0 for sev, inc in zip(pessev_i, pesinc_i) if inc == 0)
     assert all(sev > 0 for sev, inc in zip(pessev_i, pesinc_i) if inc == 1)
 
-    print("pesinc_i\tpessev_i")
-    for incidence, severity in zip(pesinc_i, pessev_i):
-        print(f"{incidence}\t{severity}")
-
-    infected = [severity for severity in pessev_i if severity > 0]
-    achieved = sum(pessev_i) / sample_count
-    print(f"infected samples : {len(infected)} of {sample_count}", file=sys.stderr)
+    # stdout describes the samples, stderr describes the run
     print(
-        f"mean severity    : {achieved:.4f}% (target {pessev:.4f}%, "
-        f"off by {achieved - pessev:+.4f})",
+        json.dumps(
+            {
+                "sample_count": sample_count,
+                "pessev_spread": spread,
+                "seed": seed,
+                "pesinc": pesinc,
+                "pessev": pessev,
+                "pesinc_i": pesinc_i,
+                "pessev_i": pessev_i,
+            }
+        )
+    )
+    print(
+        json.dumps(summarise(pesinc, pessev, sample_count, pessev_i)),
         file=sys.stderr,
     )
-    if not infected:
-        return pesinc_i, pessev_i
-
-    # PESSEV / PESINC is only reachable when PESINC * SAMPLE_COUNT is whole,
-    # otherwise the infected count is truncated and the two disagree slightly
-    print(
-        f"mean on infected : {sum(infected) / len(infected):.4f}% "
-        f"(target {pessev / pesinc * 100:.4f}%)",
-        file=sys.stderr,
-    )
-    print(f"severity spread  : {min(infected)}% .. {max(infected)}%", file=sys.stderr)
-    for value in sorted(set(infected)):
-        print(f"  {value:>3}% {infected.count(value):>4}", file=sys.stderr)
-
-    # the CLI ignores this, but the web page copies the columns from it instead
-    # of parsing its own stdout back out of the DOM
-    return pesinc_i, pessev_i
 
 
 if __name__ == "__main__":

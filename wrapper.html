@@ -265,7 +265,7 @@
     <div class="output-container">
       <div>
         <div class="stdout-header">
-          📊 Data (stdout - TSV, whole percent points)
+          📊 Data (stdout - JSON, whole percent points)
         </div>
         <pre id="stdoutView">Output data will appear here...</pre>
         <div class="copy-buttons">
@@ -286,7 +286,7 @@
         </div>
       </div>
       <div>
-        <div class="stderr-header">📝 Summary (stderr)</div>
+        <div class="stderr-header">📝 Summary (stderr - JSON)</div>
         <pre id="stderrView">Summary telemetry will appear here...</pre>
       </div>
     </div>
@@ -310,21 +310,13 @@
 
     <script type="text/javascript">
       let pyodideInstance = null;
-      // Columns of the last run, parsed out of the captured stdout. Kept as
+      // Columns of the last run, flattened out of the stdout document. Kept as
       // arrays because the stdout <pre> is not a usable source: assigning
-      // innerText turns the newlines into <br> elements, so the TSV rows cannot
-      // be read back.
+      // innerText turns the newlines into <br> elements.
       let lastColumns = { pesinc_i: [], pessev_i: [] };
-      // The threshold table of the last run, cut out of the captured stderr and
-      // split into cells. Same reasoning as lastColumns: the stderr <pre> is
-      // not a usable source once innerText has turned its newlines into <br>
-      // elements. `headers` carries the column names as Python wrote them, two
-      // of which spell out the threshold that was used.
+      // The threshold table of the last run, as displayed. Same reasoning as
+      // lastColumns: the rendered table is not a usable source to copy from.
       let lastThresholdTable = { headers: [], rows: [] };
-
-      // pessev_wrapper.py prints this line above the threshold table; the two
-      // spellings have to stay in step
-      const THRESHOLD_SUMMARY_MARKER = "=== threshold summary ===";
 
       // --- simulation rows ------------------------------------------------
 
@@ -475,61 +467,79 @@
           // so any leading whitespace is an IndentationError.
           await pyodideInstance.runPythonAsync(
             [
-              "import sys",
               "try:",
               "    pessev_wrapper.main([str(arg) for arg in argv])",
-              "except SystemExit as exit_request:",
-              "    # argparse prints its own usage and exits with an int, but",
-              "    # validate() exits with the message itself, which nothing",
-              "    # has written to stderr yet",
-              "    if isinstance(exit_request.code, str):",
-              "        print(exit_request.code, file=sys.stderr)",
+              "except SystemExit:",
+              "    # fail() has already put its reason on stderr as JSON, so",
+              "    # the exit carries nothing left to report",
+              "    pass",
             ].join("\n"),
           );
 
-          lastColumns = parseColumns(stdoutBuffer);
-          renderThresholdTable(parseThresholdSummary(stderrBuffer));
-          document.getElementById("stdoutView").innerText =
-            stdoutBuffer || "No output generated.";
-          document.getElementById("stderrView").innerText =
-            stderrBuffer || "No summary generated.";
+          const data = parseStream(stdoutBuffer);
+          const summary = parseStream(stderrBuffer);
+          lastColumns = collectColumns(data);
+          renderThresholdTable(buildThresholdTable(summary));
+          showStream("stdoutView", stdoutBuffer, data, "No output generated.");
+          showStream("stderrView", stderrBuffer, summary, "No summary generated.");
         } catch (error) {
           document.getElementById("stderrView").innerText =
             `Execution Interrupted:\n${error.message}`;
         }
       }
 
-      // main() returns nothing, so the columns come from the buffered stdout
-      // rather than from a return value like index.html uses. Reading the
-      // buffer, not the DOM, keeps the newlines intact.
-      function parseColumns(text) {
+      // Both streams carry exactly one JSON document. A Python traceback is
+      // not JSON, so a failed parse hands back null and the caller falls back
+      // to showing the raw text rather than throwing.
+      function parseStream(text) {
+        try {
+          return JSON.parse(text);
+        } catch (error) {
+          return null;
+        }
+      }
+
+      // Pretty printed when the stream parsed, verbatim when it did not
+      function showStream(viewId, text, parsed, emptyMessage) {
+        document.getElementById(viewId).innerText = parsed
+          ? JSON.stringify(parsed, null, 2)
+          : text || emptyMessage;
+      }
+
+      // The simulations come back in the order the form listed them, so
+      // concatenating their columns rebuilds the single column a spreadsheet
+      // wants, simulation 1 first.
+      function collectColumns(data) {
         const columns = { pesinc_i: [], pessev_i: [] };
-        const lines = text.split("\n");
-        for (const line of lines.slice(1)) {
-          // simulation \t pesinc_i \t pessev_i
-          const fields = line.split("\t");
-          if (fields.length !== 3) continue;
-          columns.pesinc_i.push(fields[1]);
-          columns.pessev_i.push(fields[2]);
+        for (const sim of data?.simulations ?? []) {
+          columns.pesinc_i.push(...sim.pesinc_i);
+          columns.pessev_i.push(...sim.pessev_i);
         }
         return columns;
       }
 
-      // Everything below the marker line, split on the tabs Python wrote: a
-      // header row and then one row per simulation. Comes back empty when the
-      // run failed before reaching the table, or when it ran without
-      // --threshold.
-      function parseThresholdSummary(text) {
-        const at = text.indexOf(THRESHOLD_SUMMARY_MARKER);
-        if (at === -1) return { headers: [], rows: [] };
-        const lines = text
-          .slice(at + THRESHOLD_SUMMARY_MARKER.length)
-          .trim()
-          .split("\n");
-        const [header, ...body] = lines;
+      // The two severity headings spell out the threshold that was used, which
+      // is why they are composed here rather than shipped as strings. Comes
+      // back empty when the run failed or ran without a threshold, which hides
+      // the section.
+      function buildThresholdTable(summary) {
+        if (!summary?.simulations || summary.threshold === null) {
+          return { headers: [], rows: [] };
+        }
+        const limit = summary.threshold;
         return {
-          headers: header.split("\t"),
-          rows: body.map((line) => line.split("\t")),
+          headers: [
+            "simulation",
+            "severity_0",
+            `severity_under_${limit}`,
+            `severity_${limit}_and_over`,
+          ],
+          rows: summary.simulations.map((sim) => [
+            String(sim.index),
+            String(sim.threshold_counts.unaffected),
+            String(sim.threshold_counts.below),
+            String(sim.threshold_counts.at_or_above),
+          ]),
         };
       }
 

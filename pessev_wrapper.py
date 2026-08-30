@@ -20,27 +20,45 @@ Usage:
                      when it is given does the threshold table appear. One
                      value, shared by every simulation.
 
-Writes a tab separated simulation / pesinc_i / pessev_i table to stdout and a
-summary per simulation to stderr, so
-`python pessev_wrapper.py --pesinc 5,10 --pessev 1,3 > out.tsv` keeps the data
-clean. The first column counts the simulations from one, so at the default
-sample count rows 1-200 belong to simulation 1, rows 201-400 to simulation 2,
-and so on. Nothing is seeded, so every invocation differs.
+Writes one JSON document to stdout and another to stderr, so
+`python pessev_wrapper.py --pesinc 5,10 --pessev 1,3 > out.json` keeps the data
+clean. stdout carries the data: a `simulations` list holding each simulation's
+pesinc_i and pessev_i columns, in the order the arguments named them. stderr
+carries the summary: the same list, but with the counts and means that describe
+each simulation rather than the samples themselves. Nothing is seeded, so every
+invocation differs.
 
-With --threshold, a second tab separated table follows the per simulation
-summaries on stderr, counting each simulation's samples as unaffected, below
-the threshold, or at or above it.
+With --threshold, every summary entry also carries a threshold_counts object
+splitting that simulation's samples into unaffected, below the threshold, and at
+or above it. Without it, threshold_counts is null.
+
+A run that gives up writes {"error": "..."} to stderr and exits non-zero, so the
+stderr document parses whether the run succeeded or not.
 """
 
 import argparse
+import json
 import math
 import sys
 
-from pessev import POSSIBLE_PESSEV_VALUES, calculate_pesinc_i, calculate_pessev_i
+from pessev import (
+    POSSIBLE_PESSEV_VALUES,
+    calculate_pesinc_i,
+    calculate_pessev_i,
+    fail,
+    summarise,
+)
 
-# wrapper.html cuts the threshold table out of the captured stderr by splitting
-# on this exact line, so the two files have to keep the same spelling
-THRESHOLD_SUMMARY_MARKER = "=== threshold summary ==="
+
+class JsonArgumentParser(argparse.ArgumentParser):
+    """argparse, but its own errors are JSON as well.
+
+    Bad arguments are reported by argparse itself, which would otherwise print
+    a usage block and leave stderr unparseable.
+    """
+
+    def error(self, message):
+        fail(f"could not read the arguments: {message}")
 
 
 def comma_separated_floats(text):
@@ -58,7 +76,7 @@ def comma_separated_floats(text):
 
 
 def parse_args(argv):
-    parser = argparse.ArgumentParser(
+    parser = JsonArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -111,24 +129,24 @@ def validate(pesinc_values, pessev_values, sample_count, spread, threshold):
     rows on stdout before it gives up.
     """
     if len(pesinc_values) != len(pessev_values):
-        sys.exit(
+        fail(
             f"--pesinc has {len(pesinc_values)} values and --pessev has "
             f"{len(pessev_values)}; they are paired by position, so both lists "
             f"must be the same length"
         )
     if sample_count < 1:
-        sys.exit("--sample-count must be at least 1")
+        fail("--sample-count must be at least 1")
     if spread < 0:
-        sys.exit("--pessev-spread cannot be negative")
+        fail("--pessev-spread cannot be negative")
     if threshold is not None and not 0 <= threshold <= 100:
-        sys.exit("--threshold is a severity percentage and must lie between 0 and 100")
+        fail("--threshold is a severity percentage and must lie between 0 and 100")
 
     allowed = sorted({value for value in POSSIBLE_PESSEV_VALUES if value > 0})
     for index, (pesinc, pessev) in enumerate(
         zip(pesinc_values, pessev_values), start=1
     ):
         if not 0 <= pesinc <= 100 or not 0 <= pessev <= 100:
-            sys.exit(
+            fail(
                 f"simulation {index}: PESINC and PESSEV are percentages and must "
                 f"lie between 0 and 100"
             )
@@ -137,7 +155,7 @@ def validate(pesinc_values, pessev_values, sample_count, spread, threshold):
         # has to land on an integer number of them
         target = pessev * sample_count
         if not math.isclose(target, round(target)):
-            sys.exit(
+            fail(
                 f"simulation {index}: PESSEV * SAMPLE_COUNT = {target} is not a "
                 f"whole number of percent points, so the mean cannot be matched"
             )
@@ -148,7 +166,7 @@ def validate(pesinc_values, pessev_values, sample_count, spread, threshold):
         lowest = infected_count * allowed[0]
         highest = infected_count * allowed[-1]
         if not lowest <= round(target) <= highest:
-            sys.exit(
+            fail(
                 f"simulation {index}: PESSEV {pessev:g}% is out of reach: "
                 f"{infected_count} infected samples, each between {allowed[0]}% "
                 f"and {allowed[-1]}%, hold the mean between "
@@ -162,75 +180,12 @@ def run_one(index, pesinc, pessev, sample_count, spread):
     try:
         pessev_i = calculate_pessev_i(pesinc_i, pessev, spread)
     except ValueError as error:  # validate() should have caught this already
-        sys.exit(f"simulation {index}: {error}")
+        fail(f"simulation {index}: {error}")
 
     assert all(value in POSSIBLE_PESSEV_VALUES for value in pessev_i)
     assert all(sev == 0 for sev, inc in zip(pessev_i, pesinc_i) if inc == 0)
     assert all(sev > 0 for sev, inc in zip(pessev_i, pesinc_i) if inc == 1)
     return pesinc_i, pessev_i
-
-
-def print_summary(index, pesinc, pessev, sample_count, pessev_i):
-    """The report pessev.py writes for a single run, one block per simulation."""
-    print(
-        f"=== simulation {index}: PESINC {pesinc:g}%, PESSEV {pessev:g}% ===",
-        file=sys.stderr,
-    )
-
-    infected = [severity for severity in pessev_i if severity > 0]
-    achieved = sum(pessev_i) / sample_count
-    print(f"infected samples : {len(infected)} of {sample_count}", file=sys.stderr)
-    print(
-        f"mean severity    : {achieved:.4f}% (target {pessev:.4f}%, "
-        f"off by {achieved - pessev:+.4f})",
-        file=sys.stderr,
-    )
-    if not infected:
-        return
-
-    # PESSEV / PESINC is only reachable when PESINC * SAMPLE_COUNT is whole,
-    # otherwise the infected count is truncated and the two disagree slightly
-    print(
-        f"mean on infected : {sum(infected) / len(infected):.4f}% "
-        f"(target {pessev / pesinc * 100:.4f}%)",
-        file=sys.stderr,
-    )
-    print(f"severity spread  : {min(infected)}% .. {max(infected)}%", file=sys.stderr)
-    for value in sorted(set(infected)):
-        print(f"  {value:>3}% {infected.count(value):>4}", file=sys.stderr)
-
-
-def threshold_counts(pessev_i, threshold):
-    """One simulation's severities split into unaffected / below / at or above.
-
-    The three counts partition the samples, which is why the last one asks for
-    a severity above zero as well: a threshold of 0 would otherwise sweep the
-    unaffected samples into both the first bucket and the last.
-    """
-    unaffected = sum(1 for severity in pessev_i if severity == 0)
-    below = sum(1 for severity in pessev_i if 0 < severity < threshold)
-    at_or_above = sum(1 for severity in pessev_i if severity > 0 and severity >= threshold)
-    return unaffected, below, at_or_above
-
-
-def print_threshold_summary(counts_per_simulation, threshold):
-    """The threshold table, printed once after every simulation has run.
-
-    Tab separated under a fixed marker line, so wrapper.html can cut it out of
-    the stderr it captured and hand it to a spreadsheet in one piece. The
-    threshold travels in the column names rather than in the marker, which
-    leaves the marker a fixed string to split on and still labels the numbers
-    once they have been pasted somewhere else.
-    """
-    print(THRESHOLD_SUMMARY_MARKER, file=sys.stderr)
-    print(
-        f"simulation\tseverity_0\tseverity_under_{threshold:g}"
-        f"\tseverity_{threshold:g}_and_over",
-        file=sys.stderr,
-    )
-    for index, counts in enumerate(counts_per_simulation, start=1):
-        unaffected, below, at_or_above = counts
-        print(f"{index}\t{unaffected}\t{below}\t{at_or_above}", file=sys.stderr)
 
 
 def main(argv):
@@ -243,23 +198,41 @@ def main(argv):
         args.threshold,
     )
 
-    # collected rather than printed inside the loop, so the table arrives as one
-    # block instead of a row wedged between each pair of summaries
-    counts_per_simulation = []
+    # stdout describes the samples, stderr describes the simulations; both are
+    # assembled in full before either is written, so a run that gives up part
+    # way through cannot leave half a document on stdout
+    data = {
+        "sample_count": args.sample_count,
+        "pessev_spread": args.pessev_spread,
+        "threshold": args.threshold,
+        "simulations": [],
+    }
+    summary = {"threshold": args.threshold, "simulations": []}
 
-    print("simulation\tpesinc_i\tpessev_i")
     for index, (pesinc, pessev) in enumerate(zip(args.pesinc, args.pessev), start=1):
         pesinc_i, pessev_i = run_one(
             index, pesinc, pessev, args.sample_count, args.pessev_spread
         )
-        for incidence, severity in zip(pesinc_i, pessev_i):
-            print(f"{index}\t{incidence}\t{severity}")
-        print_summary(index, pesinc, pessev, args.sample_count, pessev_i)
-        if args.threshold is not None:
-            counts_per_simulation.append(threshold_counts(pessev_i, args.threshold))
+        data["simulations"].append(
+            {
+                "index": index,
+                "pesinc": pesinc,
+                "pessev": pessev,
+                "pesinc_i": pesinc_i,
+                "pessev_i": pessev_i,
+            }
+        )
+        summary["simulations"].append(
+            {
+                "index": index,
+                **summarise(
+                    pesinc, pessev, args.sample_count, pessev_i, args.threshold
+                ),
+            }
+        )
 
-    if args.threshold is not None:
-        print_threshold_summary(counts_per_simulation, args.threshold)
+    print(json.dumps(data))
+    print(json.dumps(summary), file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -22,18 +22,44 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Both scripts write JSON to both streams, so the checks assert the
+      # payload parses and carries what the pages read, not just that the
+      # process exited 0
       - name: Sanity check pessev.py
-        run: python3 pessev.py 48 20 200 60 20260828 > /dev/null
+        run: |
+          python3 pessev.py 48 20 200 60 20260828 > out.json 2> summary.json
+          python3 - <<'EOF'
+          import json
+          data = json.load(open("out.json"))
+          summary = json.load(open("summary.json"))
+          assert len(data["pesinc_i"]) == len(data["pessev_i"]) == 200
+          assert summary["infected_count"] == sum(data["pesinc_i"])
+          assert summary["achieved_mean"] == sum(data["pessev_i"]) / 200
+          EOF
 
       - name: Sanity check pessev_wrapper.py
-        run: python3 pessev_wrapper.py --pesinc 48,10 --pessev 20,3 > /dev/null
-
-      # --threshold is optional, so the check above already covers the page
-      # without it; this one covers the threshold table it adds to stderr
-      - name: Sanity check pessev_wrapper.py --threshold
         run: |
           python3 pessev_wrapper.py --pesinc 48,10 --pessev 20,3 --threshold 10 \
-            2>&1 >/dev/null | grep -q '^=== threshold summary ===$'
+            > out.json 2> summary.json
+          python3 - <<'EOF'
+          import json
+          data = json.load(open("out.json"))
+          summary = json.load(open("summary.json"))
+          assert len(data["simulations"]) == len(summary["simulations"]) == 2
+          for sim, entry in zip(data["simulations"], summary["simulations"]):
+              assert sim["index"] == entry["index"]
+              assert len(sim["pesinc_i"]) == len(sim["pessev_i"]) == 200
+              counts = entry["threshold_counts"]
+              # the three buckets must partition the samples
+              assert sum(counts.values()) == 200, counts
+          EOF
+
+      # a rejected run must still leave stderr parseable, which is what both
+      # pages rely on to show the reason
+      - name: Sanity check the error path
+        run: |
+          ! python3 pessev_wrapper.py --pesinc 1 --pessev 99 2> error.json
+          python3 -c "import json; assert json.load(open('error.json'))['error']"
 
       # Stage only what the page needs, so the spreadsheets and the PDF in the
       # repo do not end up on the public site
