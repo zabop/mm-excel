@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MM GENERATOR - BATCH</title>
+    <title>MM GENERATOR</title>
     <!-- Load Pyodide WebAssembly Framework -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.28.3/full/pyodide.js"></script>
     <style>
@@ -293,7 +293,7 @@
     </style>
   </head>
   <body>
-    <h1>PESINC / PESSEV Batch Generator</h1>
+    <h1>MM Generator</h1>
     <div id="status">⏳ Initializing WebAssembly Python environment...</div>
 
     <form id="paramForm" onsubmit="runGenerator(event)">
@@ -414,7 +414,11 @@
           <option value="median">median (blind here)</option>
           <option value="trimmed">trimmed</option>
         </select>
-        <button type="button" id="heterogeneityBtn" onclick="runHeterogeneity(this)">
+        <button
+          type="button"
+          id="heterogeneityBtn"
+          onclick="runHeterogeneity(this)"
+        >
           Calculate
         </button>
       </div>
@@ -542,7 +546,10 @@
           //    module, so both files go onto Pyodide's virtual filesystem and
           //    are imported the ordinary way.
           paths.forEach((path, index) => {
-            pyodideInstance.FS.writeFile(path.replace("./", ""), sources[index]);
+            pyodideInstance.FS.writeFile(
+              path.replace("./", ""),
+              sources[index],
+            );
           });
           // heterogeneity_tests is NOT imported here: importing it pulls in
           // scipy, and scipy is a ~18 MB download that only the Heterogeneity
@@ -772,14 +779,17 @@
           setHeterogeneityStatus("Run the simulation first.", true);
           return;
         }
-        const simulationCount = document.getElementById("simulationCount").value;
+        const simulationCount =
+          document.getElementById("simulationCount").value;
         const leveneCenter = document.getElementById("leveneCenter").value;
 
         button.disabled = true;
         renderHeterogeneityTable({ headers: [], rows: [] });
         try {
           if (!scipyLoad) {
-            setHeterogeneityStatus("Loading scipy (~18 MB, first time only)...");
+            setHeterogeneityStatus(
+              "Loading scipy (~18 MB, first time only)...",
+            );
           }
           await loadScipy();
           setHeterogeneityStatus("Calculating...");
@@ -836,7 +846,10 @@
             );
           }
         } catch (error) {
-          setHeterogeneityStatus(`Execution interrupted: ${error.message}`, true);
+          setHeterogeneityStatus(
+            `Execution interrupted: ${error.message}`,
+            true,
+          );
         } finally {
           button.disabled = false;
         }
@@ -946,7 +959,9 @@
       // Values only: the numbers are pasted under headings that already exist
       // in the spreadsheet, so a header cell would land in the wrong row
       function copyTableColumn(table, index, button) {
-        const values = table.rows.map((row) => (row[index] === null ? "" : row[index]));
+        const values = table.rows.map((row) =>
+          row[index] === null ? "" : row[index],
+        );
         return copyText(values.join("\n"), button);
       }
 
