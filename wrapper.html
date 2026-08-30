@@ -118,14 +118,24 @@
         font-size: 14px;
         padding: 8px 14px;
       }
-      /* One simulation per row: the two number fields share the width and the
-         add/remove buttons take only what they need at the end. */
+      /* One simulation per row: a number, the two fields sharing the width, and
+         the add/remove buttons taking only what they need at the end. */
       .sim-row {
         display: grid;
-        grid-template-columns: 1fr 1fr auto auto;
+        grid-template-columns: 2em 1fr 1fr auto auto;
         gap: 10px;
         margin-bottom: 10px;
         align-items: start;
+      }
+      /* the number of the simulation this row becomes in the output, so the
+         labels here line up with the leftmost output column */
+      .row-number {
+        font-weight: bold;
+        color: #888;
+        text-align: right;
+        /* the inputs have 8px of padding above their text; matching it here
+           keeps the number on the same baseline */
+        padding-top: 8px;
       }
       .row-btn {
         margin-top: 0;
@@ -135,15 +145,16 @@
         line-height: 1;
       }
       /* the column captions sit above the first row only, so the rows below it
-         stay compact -- same widths as .sim-row minus the button columns */
+         stay compact -- same track widths as .sim-row, with the leading number
+         and the two buttons left blank */
       .sim-head {
         display: grid;
-        grid-template-columns: 1fr 1fr auto auto;
+        grid-template-columns: 2em 1fr 1fr auto auto;
         gap: 10px;
         font-weight: bold;
         margin-bottom: 5px;
       }
-      .sim-head span:nth-child(3) {
+      .sim-head span:nth-child(4) {
         width: 90px;
       }
       .section-label {
@@ -178,6 +189,7 @@
 
       <div class="section-label">Simulations</div>
       <div class="sim-head">
+        <span></span>
         <span>PESINC (Incidence %, 0 - 100)</span>
         <span>PESSEV (Mean severity %, 0 - 100)</span>
         <span></span>
@@ -232,6 +244,7 @@
         const row = document.createElement("div");
         row.className = "sim-row";
         row.innerHTML = `
+          <span class="row-number"></span>
           <input type="number" class="pesinc" step="any" min="0" max="100"
                  value="${pesinc}" placeholder="e.g. 48" required />
           <input type="number" class="pessev" step="any" min="0" max="100"
@@ -256,11 +269,14 @@
         refreshRowControls();
       }
 
-      // The form must always hold at least one simulation, so the last
-      // remaining row cannot delete itself
+      // Renumber from the top after every add or remove, so the labels always
+      // match the simulation column in the output. The form must also always
+      // hold at least one simulation, so the last remaining row cannot delete
+      // itself.
       function refreshRowControls() {
         const rows = document.querySelectorAll("#simulationRows .sim-row");
-        rows.forEach((row) => {
+        rows.forEach((row, index) => {
+          row.querySelector(".row-number").innerText = index + 1;
           row.querySelector(".remove").disabled = rows.length === 1;
         });
       }
@@ -322,8 +338,12 @@
           "Processing calculation...";
 
         const rows = [...document.querySelectorAll("#simulationRows .sim-row")];
-        const pesincValues = rows.map((row) => row.querySelector(".pesinc").value);
-        const pessevValues = rows.map((row) => row.querySelector(".pessev").value);
+        const pesincValues = rows.map(
+          (row) => row.querySelector(".pesinc").value,
+        );
+        const pessevValues = rows.map(
+          (row) => row.querySelector(".pessev").value,
+        );
         const sampleCount = document.getElementById("sampleCount").value;
         const spread = document.getElementById("spread").value;
 
