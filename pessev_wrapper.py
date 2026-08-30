@@ -138,7 +138,8 @@ def validate(pesinc_values, pessev_values, sample_count, spread, threshold):
         if not 0 <= pesinc <= 100 or not 0 <= pessev <= 100:
             fail(
                 f"simulation {index}: PESINC and PESSEV are percentages and must "
-                f"lie between 0 and 100"
+                f"lie between 0 and 100",
+                simulation=index,
             )
 
         # the algorithm distributes whole percent points, so the requested mean
@@ -147,7 +148,8 @@ def validate(pesinc_values, pessev_values, sample_count, spread, threshold):
         if not math.isclose(target, round(target)):
             fail(
                 f"simulation {index}: PESSEV * SAMPLE_COUNT = {target} is not a "
-                f"whole number of percent points, so the mean cannot be matched"
+                f"whole number of percent points, so the mean cannot be matched",
+                simulation=index,
             )
 
         # the same reachability check calculate_pessev_i makes, repeated here
@@ -160,7 +162,8 @@ def validate(pesinc_values, pessev_values, sample_count, spread, threshold):
                 f"simulation {index}: PESSEV {pessev:g}% is out of reach: "
                 f"{infected_count} infected samples, each between {allowed[0]}% "
                 f"and {allowed[-1]}%, hold the mean between "
-                f"{lowest / sample_count:.2f}% and {highest / sample_count:.2f}%"
+                f"{lowest / sample_count:.2f}% and {highest / sample_count:.2f}%",
+                simulation=index,
             )
 
 
@@ -170,7 +173,7 @@ def run_one(index, pesinc, pessev, sample_count, spread):
     try:
         pessev_i = calculate_pessev_i(pesinc_i, pessev, spread)
     except ValueError as error:  # validate() should have caught this already
-        fail(f"simulation {index}: {error}")
+        fail(f"simulation {index}: {error}", simulation=index)
 
     assert all(value in POSSIBLE_PESSEV_VALUES for value in pessev_i)
     assert all(sev == 0 for sev, inc in zip(pessev_i, pesinc_i) if inc == 0)

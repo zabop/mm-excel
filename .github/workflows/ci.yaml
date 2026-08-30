@@ -63,8 +63,19 @@ jobs:
       # pages rely on to show the reason
       - name: Sanity check the error path
         run: |
-          ! python3 pessev_wrapper.py --pesinc 1 --pessev 99 2> error.json
-          python3 -c "import json; assert json.load(open('error.json'))['error']"
+          ! python3 pessev_wrapper.py --pesinc 48,1 --pessev 20,99 2> error.json
+          ! python3 pessev_wrapper.py --pesinc 48,10 --pessev 20 2> general.json
+          python3 - <<'EOF'
+          import json
+          # wrapper.html marks the offending form row from this index, so a
+          # failure that knows which simulation broke has to say so
+          failed = json.load(open("error.json"))
+          assert failed["error"] and failed["simulation"] == 2, failed
+          # and one that is not about a particular row must not name one, or the
+          # page would redden an innocent input
+          general = json.load(open("general.json"))
+          assert general["error"] and "simulation" not in general, general
+          EOF
 
       - name: Sanity check heterogeneity_tests.py
         run: |

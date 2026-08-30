@@ -39,13 +39,16 @@ POSSIBLE_PESSEV_VALUES = [
 ]  # fmt: skip
 
 
-def fail(message) -> NoReturn:
+def fail(message, **fields) -> NoReturn:
     """Give up with a stderr document that still parses as JSON.
 
     Every abandoned run leaves stderr holding an object rather than bare prose,
-    so a caller can read the reason the same way it reads a summary.
+    so a caller can read the reason the same way it reads a summary. Extra
+    keyword arguments join the object alongside the message: a caller that knows
+    which simulation went wrong passes simulation=index, which saves the web
+    page picking the number back out of the prose.
     """
-    print(json.dumps({"error": message}), file=sys.stderr)
+    print(json.dumps({"error": message, **fields}), file=sys.stderr)
     sys.exit(1)
 
 

@@ -137,6 +137,15 @@
            keeps the number on the same baseline */
         padding-top: 8px;
       }
+      /* the row the generator gave up on. Cleared at the start of every run,
+         so it stays only while that row is still the one that fails. */
+      .sim-row.invalid input {
+        border-color: #dc3545;
+        background-color: #fff5f5;
+      }
+      .sim-row.invalid .row-number {
+        color: #dc3545;
+      }
       .row-btn {
         margin-top: 0;
         padding: 8px 0;
@@ -478,6 +487,33 @@
 
       addSimulationRow(null, "48", "20");
 
+      // A run that gives up names the simulation it gave up on, so the row
+      // that caused it can be marked without picking the number back out of the
+      // message. Errors that are not about a particular row -- a bad threshold,
+      // mismatched list lengths -- carry no index and mark nothing.
+      function markFailedRow(summary) {
+        const index = summary?.simulation;
+        if (!index) return;
+        const row = document.querySelectorAll("#simulationRows .sim-row")[
+          index - 1
+        ];
+        if (!row) return;
+        row.classList.add("invalid");
+        row.title = summary.error;
+      }
+
+      // Called at the start of every run rather than on a successful one, so a
+      // row that has been edited, or removed and renumbered, does not keep a
+      // mark left by an earlier failure
+      function clearFailedRows() {
+        document
+          .querySelectorAll("#simulationRows .sim-row.invalid")
+          .forEach((row) => {
+            row.classList.remove("invalid");
+            row.title = "";
+          });
+      }
+
       // --- python environment ---------------------------------------------
 
       async function initEnvironment() {
@@ -538,6 +574,7 @@
 
         lastColumns = { pesinc_i: [], pessev_i: [] };
         lastData = null;
+        clearFailedRows();
         // hidden rather than left showing the previous run's counts, which a
         // failed run would otherwise leave stranded under a fresh error message
         renderThresholdTable({ headers: [], rows: [] });
@@ -605,6 +642,7 @@
 
           const data = parseStream(stdoutBuffer);
           const summary = parseStream(stderrBuffer);
+          markFailedRow(summary);
           lastData = data;
           lastColumns = collectColumns(data);
           renderThresholdTable(buildThresholdTable(summary));
