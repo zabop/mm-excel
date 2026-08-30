@@ -43,22 +43,12 @@ import sys
 
 from pessev import (
     POSSIBLE_PESSEV_VALUES,
+    JsonArgumentParser,
     calculate_pesinc_i,
     calculate_pessev_i,
     fail,
     summarise,
 )
-
-
-class JsonArgumentParser(argparse.ArgumentParser):
-    """argparse, but its own errors are JSON as well.
-
-    Bad arguments are reported by argparse itself, which would otherwise print
-    a usage block and leave stderr unparseable.
-    """
-
-    def error(self, message):
-        fail(f"could not read the arguments: {message}")
 
 
 def comma_separated_floats(text):

@@ -22,6 +22,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # heterogeneity_tests.py calls scipy.stats; the page loads the same
+      # package into Pyodide at run time
+      - name: Install scipy
+        run: pip install scipy
+
       # Both scripts write JSON to both streams, so the checks assert the
       # payload parses and carries what the pages read, not just that the
       # process exited 0
@@ -61,12 +66,61 @@ jobs:
           ! python3 pessev_wrapper.py --pesinc 1 --pessev 99 2> error.json
           python3 -c "import json; assert json.load(open('error.json'))['error']"
 
+      - name: Sanity check heterogeneity_tests.py
+        run: |
+          python3 pessev_wrapper.py --pesinc 48,10,100,48,10,100 \
+            --pessev 20,3,50,20,3,50 2>/dev/null > six.json
+          python3 heterogeneity_tests.py --simulation-count 3 < six.json \
+            > het.json 2> het.err
+          # stderr must stay empty: scipy warns there on degenerate groups, and
+          # loose text would break the one-JSON-document-per-stream contract
+          test ! -s het.err
+          python3 - <<'EOF'
+          import json
+          result = json.load(open("het.json"))    # json.loads rejects NaN
+          assert result["treatment_count"] == 2
+          assert [t["simulations"] for t in result["treatments"]] == [[1, 2, 3], [4, 5, 6]]
+          for treatment in result["treatments"]:
+              for name in ("levene", "bartlett"):
+                  p = treatment[name]["p_value"]
+                  assert p is None or 0.0 <= p <= 1.0, (name, p)
+          EOF
+
+      # an all-zero column leaves both tests undefined; the document must still
+      # parse, carrying nulls rather than the NaN token json.dumps would write
+      - name: Sanity check heterogeneity on degenerate data
+        run: |
+          python3 pessev_wrapper.py --pesinc 0,0 --pessev 0,0 2>/dev/null \
+            > degenerate_in.json
+          python3 heterogeneity_tests.py --simulation-count 2 \
+            < degenerate_in.json > degenerate.json 2> degenerate.err
+          # this is the input that makes scipy divide by zero and warn on
+          # stderr, so it is the only place the warning guard can actually fire
+          test ! -s degenerate.err
+          python3 -c "
+          import json
+          t = json.load(open('degenerate.json'))['treatments'][0]
+          assert t['levene']['statistic'] is None and 'note' in t['levene']
+          "
+
+      - name: Sanity check heterogeneity rejections
+        run: |
+          ! python3 heterogeneity_tests.py --simulation-count 1 < six.json 2> e1.json
+          ! python3 heterogeneity_tests.py --simulation-count 4 < six.json 2> e2.json
+          ! echo 'not json' | python3 heterogeneity_tests.py --simulation-count 2 2> e3.json
+          python3 -c "
+          import json
+          for name in ('e1.json', 'e2.json', 'e3.json'):
+              assert json.load(open(name))['error'], name
+          "
+
       # Stage only what the page needs, so the spreadsheets and the PDF in the
       # repo do not end up on the public site
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp index.html pessev.py wrapper.html pessev_wrapper.py _site/
+          cp index.html pessev.py wrapper.html pessev_wrapper.py \
+             heterogeneity_tests.py _site/
 
       # enablement: turns Pages on (source = GitHub Actions) the first time this
       # runs, instead of failing with "Get Pages site failed"

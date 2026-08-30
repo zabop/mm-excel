@@ -208,8 +208,78 @@
       #thresholdTable tbody tr:last-child td {
         border-bottom: none;
       }
-      #thresholdCopyButtons {
+      #thresholdCopyButtons,
+      #heterogeneityCopyButtons {
         margin-top: 12px;
+      }
+      /* the heterogeneity table is the threshold table in a different card, so
+         it takes the same rules rather than a second copy of them */
+      #heterogeneityTable {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 14px;
+      }
+      #heterogeneityTable th,
+      #heterogeneityTable td {
+        border-bottom: 1px solid #eaeaea;
+        padding: 8px 10px;
+        text-align: right;
+      }
+      #heterogeneityTable td {
+        font-family: monospace;
+      }
+      #heterogeneityTable th:first-child,
+      #heterogeneityTable td:first-child {
+        text-align: left;
+        font-family: inherit;
+        color: #888;
+      }
+      #heterogeneityTable th {
+        color: #555;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        border-bottom: 2px solid #eaeaea;
+      }
+      #heterogeneityTable tbody tr:last-child td {
+        border-bottom: none;
+      }
+      .section-note {
+        font-size: 13px;
+        color: #666;
+        margin: 0 0 12px;
+      }
+      /* the input sits inline with its label and button, unlike the stacked
+         .form-group fields in the main form */
+      .heterogeneity-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .heterogeneity-controls label {
+        margin-bottom: 0;
+      }
+      .heterogeneity-controls input {
+        width: 90px;
+      }
+      .heterogeneity-controls select {
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+      }
+      .heterogeneity-controls button {
+        margin-top: 0;
+        font-size: 14px;
+        padding: 8px 14px;
+      }
+      .heterogeneity-status {
+        font-size: 13px;
+        margin-top: 10px;
+        min-height: 1.2em;
+      }
+      .heterogeneity-status.error {
+        color: #dc3545;
       }
     </style>
   </head>
@@ -308,15 +378,58 @@
       <div class="copy-buttons" id="thresholdCopyButtons"></div>
     </div>
 
+    <!-- Grouping is a question about data that already exists, so this section
+         carries its own input and its own button rather than joining the main
+         form: re-grouping must not draw fresh random data, or the results would
+         look unstable for no reason. -->
+    <div class="threshold-section">
+      <div class="threshold-header">🧪 Heterogeneity</div>
+      <p class="section-note">
+        Consecutive simulations are grouped into treatments. With
+        <em>simulation_count</em> = k, simulations 1..k are treatment 1, k+1..2k
+        are treatment 2, and so on. Each treatment gets a Levene and a Bartlett
+        test of homogeneity of variance across the pessev_i columns of the
+        simulations that form it.
+      </p>
+      <div class="heterogeneity-controls">
+        <label for="simulationCount">simulation_count:</label>
+        <input type="number" id="simulationCount" min="2" step="1" value="2" />
+        <!-- median is scipy's default but is blind on this data: below 50%
+             incidence the median of a column is 0, so |x - median| is x and its
+             mean is exactly PESSEV, which the generator pins. Every group then
+             scores identically and Levene returns 0.0 / p=1.0 however far the
+             variances actually are apart. -->
+        <label for="leveneCenter">Levene centre:</label>
+        <select id="leveneCenter">
+          <option value="mean" selected>mean</option>
+          <option value="median">median (blind here)</option>
+          <option value="trimmed">trimmed</option>
+        </select>
+        <button type="button" id="heterogeneityBtn" onclick="runHeterogeneity(this)">
+          Calculate
+        </button>
+      </div>
+      <div id="heterogeneityStatus" class="heterogeneity-status"></div>
+      <div id="heterogeneitySection" hidden>
+        <table id="heterogeneityTable">
+          <thead>
+            <tr id="heterogeneityHead"></tr>
+          </thead>
+          <tbody id="heterogeneityBody"></tbody>
+        </table>
+        <div class="copy-buttons" id="heterogeneityCopyButtons"></div>
+      </div>
+    </div>
+
     <script type="text/javascript">
       let pyodideInstance = null;
       // Columns of the last run, flattened out of the stdout document. Kept as
       // arrays because the stdout <pre> is not a usable source: assigning
       // innerText turns the newlines into <br> elements.
       let lastColumns = { pesinc_i: [], pessev_i: [] };
-      // The threshold table of the last run, as displayed. Same reasoning as
-      // lastColumns: the rendered table is not a usable source to copy from.
-      let lastThresholdTable = { headers: [], rows: [] };
+      // The stdout document of the last run, kept whole because the
+      // heterogeneity section re-groups it without regenerating the data
+      let lastData = null;
 
       // --- simulation rows ------------------------------------------------
 
@@ -369,10 +482,16 @@
 
       async function initEnvironment() {
         try {
-          // 1. Fetch both scripts asynchronously. pessev_wrapper.py imports
-          //    pessev, so the imported module has to be on disk as well.
-          const [pessevSource, wrapperSource] = await Promise.all(
-            ["./pessev.py", "./pessev_wrapper.py"].map(async (path) => {
+          // 1. Fetch the scripts asynchronously. pessev_wrapper.py and
+          //    heterogeneity_tests.py both import pessev, so the imported
+          //    module has to be on disk as well.
+          const paths = [
+            "./pessev.py",
+            "./pessev_wrapper.py",
+            "./heterogeneity_tests.py",
+          ];
+          const sources = await Promise.all(
+            paths.map(async (path) => {
               const response = await fetch(path);
               if (!response.ok) throw new Error(`Could not find ${path} file.`);
               return response.text();
@@ -386,8 +505,12 @@
           //    namespace: `from pessev import ...` needs a real importable
           //    module, so both files go onto Pyodide's virtual filesystem and
           //    are imported the ordinary way.
-          pyodideInstance.FS.writeFile("pessev.py", pessevSource);
-          pyodideInstance.FS.writeFile("pessev_wrapper.py", wrapperSource);
+          paths.forEach((path, index) => {
+            pyodideInstance.FS.writeFile(path.replace("./", ""), sources[index]);
+          });
+          // heterogeneity_tests is NOT imported here: importing it pulls in
+          // scipy, and scipy is a ~18 MB download that only the Heterogeneity
+          // section needs. It is imported on first use instead.
           await pyodideInstance.runPythonAsync(
             [
               "import sys",
@@ -414,9 +537,13 @@
         event.preventDefault();
 
         lastColumns = { pesinc_i: [], pessev_i: [] };
+        lastData = null;
         // hidden rather than left showing the previous run's counts, which a
         // failed run would otherwise leave stranded under a fresh error message
         renderThresholdTable({ headers: [], rows: [] });
+        // the previous run's tests describe data that no longer exists
+        renderHeterogeneityTable({ headers: [], rows: [] });
+        setHeterogeneityStatus("");
         document.getElementById("stdoutView").innerText =
           "Processing calculation...";
         document.getElementById("stderrView").innerText =
@@ -478,6 +605,7 @@
 
           const data = parseStream(stdoutBuffer);
           const summary = parseStream(stderrBuffer);
+          lastData = data;
           lastColumns = collectColumns(data);
           renderThresholdTable(buildThresholdTable(summary));
           showStream(
@@ -579,16 +707,151 @@
         };
       }
 
-      // Rebuilds the whole section from the parsed table, buttons included: the
-      // two severity column names change with the threshold, so the labels
-      // cannot be written into the markup up front.
-      function renderThresholdTable(table) {
-        lastThresholdTable = table;
+      // --- heterogeneity ----------------------------------------------------
 
-        const section = document.getElementById("thresholdSection");
-        const head = document.getElementById("thresholdHead");
-        const body = document.getElementById("thresholdBody");
-        const buttons = document.getElementById("thresholdCopyButtons");
+      // Kept so a second Calculate reuses the loaded package instead of asking
+      // Pyodide for it again; the promise, not a boolean, so two quick clicks
+      // wait on one download rather than starting two.
+      let scipyLoad = null;
+
+      function loadScipy() {
+        if (!scipyLoad) {
+          scipyLoad = pyodideInstance.loadPackage("scipy");
+        }
+        return scipyLoad;
+      }
+
+      function setHeterogeneityStatus(message, isError = false) {
+        const status = document.getElementById("heterogeneityStatus");
+        status.innerText = message;
+        status.className = isError
+          ? "heterogeneity-status error"
+          : "heterogeneity-status";
+      }
+
+      async function runHeterogeneity(button) {
+        if (!lastData) {
+          setHeterogeneityStatus("Run the simulation first.", true);
+          return;
+        }
+        const simulationCount = document.getElementById("simulationCount").value;
+        const leveneCenter = document.getElementById("leveneCenter").value;
+
+        button.disabled = true;
+        renderHeterogeneityTable({ headers: [], rows: [] });
+        try {
+          if (!scipyLoad) {
+            setHeterogeneityStatus("Loading scipy (~18 MB, first time only)...");
+          }
+          await loadScipy();
+          setHeterogeneityStatus("Calculating...");
+
+          let stdoutBuffer = "";
+          let stderrBuffer = "";
+          pyodideInstance.setStdout({
+            batched: (text) => {
+              stdoutBuffer += text + "\n";
+            },
+          });
+          pyodideInstance.setStderr({
+            batched: (text) => {
+              stderrBuffer += text + "\n";
+            },
+          });
+
+          // the payload is the document Python already produced, handed back
+          // verbatim rather than rebuilt from lastData, so the tests run on
+          // exactly what the generator wrote
+          pyodideInstance.globals.set("payload", JSON.stringify(lastData));
+          pyodideInstance.globals.set("simulation_count", simulationCount);
+          pyodideInstance.globals.set("levene_center", leveneCenter);
+
+          // Not indented: runPythonAsync hands the string straight to Python,
+          // so any leading whitespace is an IndentationError.
+          await pyodideInstance.runPythonAsync(
+            [
+              "import heterogeneity_tests",
+              "try:",
+              "    heterogeneity_tests.run(",
+              "        payload, int(simulation_count), levene_center",
+              "    )",
+              "except SystemExit:",
+              "    # fail() has already put its reason on stderr as JSON",
+              "    pass",
+            ].join("\n"),
+          );
+
+          const result = parseStream(stdoutBuffer);
+          const error = parseStream(stderrBuffer);
+          if (error?.error) {
+            setHeterogeneityStatus(error.error, true);
+          } else if (!result) {
+            setHeterogeneityStatus(
+              stderrBuffer || "The tests produced no output.",
+              true,
+            );
+          } else {
+            renderHeterogeneityTable(buildHeterogeneityTable(result));
+            setHeterogeneityStatus(
+              `${result.treatment_count} treatment(s) of ${result.simulation_count}, ` +
+                `Levene centred on the ${result.levene_center}.`,
+            );
+          }
+        } catch (error) {
+          setHeterogeneityStatus(`Execution interrupted: ${error.message}`, true);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      // Statistics and p-values are null when a treatment carries no variance
+      // to compare; renderTable draws those as a dash.
+      function buildHeterogeneityTable(result) {
+        if (!result?.treatments?.length) return { headers: [], rows: [] };
+        const round = (value) =>
+          value === null ? null : Number(value.toPrecision(6));
+        return {
+          headers: [
+            "treatment",
+            "simulations",
+            "levene_statistic",
+            "levene_p",
+            "bartlett_statistic",
+            "bartlett_p",
+          ],
+          rows: result.treatments.map((t) => [
+            String(t.treatment),
+            t.simulations.join(", "),
+            round(t.levene.statistic),
+            round(t.levene.p_value),
+            round(t.bartlett.statistic),
+            round(t.bartlett.p_value),
+          ]),
+        };
+      }
+
+      function renderHeterogeneityTable(table) {
+        renderTable(
+          {
+            section: "heterogeneitySection",
+            head: "heterogeneityHead",
+            body: "heterogeneityBody",
+            buttons: "heterogeneityCopyButtons",
+          },
+          table,
+        );
+      }
+
+      // Rebuilds a whole table section from a {headers, rows} table, buttons
+      // included: column names here are composed at run time from the threshold
+      // or the test names, so they cannot be written into the markup up front.
+      // `ids` names the four elements to fill, which is what lets the threshold
+      // table and the heterogeneity table share this.
+      function renderTable(ids, table) {
+        const section = document.getElementById(ids.section);
+        const head = document.getElementById(ids.head);
+        const body = document.getElementById(ids.body);
+        const buttons = document.getElementById(ids.buttons);
         head.innerHTML = "";
         body.innerHTML = "";
         buttons.innerHTML = "";
@@ -605,22 +868,36 @@
           const tr = document.createElement("tr");
           for (const value of row) {
             const cell = document.createElement("td");
-            cell.innerText = value;
+            // a null statistic is shown as a dash carrying its reason, rather
+            // than as an empty cell that looks like a rendering bug
+            cell.innerText = value === null ? "\u2014" : value;
             tr.appendChild(cell);
           }
           body.appendChild(tr);
         }
 
-        // column 0 is the simulation number, which labels the rows rather than
-        // being one of the counts, so it gets no button of its own
+        // column 0 labels the rows rather than being one of the values, so it
+        // gets no button of its own
         table.headers.slice(1).forEach((name, offset) => {
           const index = offset + 1;
           const button = document.createElement("button");
           button.type = "button";
           button.innerText = `Copy ${name}`;
-          button.onclick = () => copyThresholdColumn(index, button);
+          button.onclick = () => copyTableColumn(table, index, button);
           buttons.appendChild(button);
         });
+      }
+
+      function renderThresholdTable(table) {
+        renderTable(
+          {
+            section: "thresholdSection",
+            head: "thresholdHead",
+            body: "thresholdBody",
+            buttons: "thresholdCopyButtons",
+          },
+          table,
+        );
       }
 
       // One value per line, so a paste lands in a single spreadsheet column
@@ -628,10 +905,10 @@
         return copyText(lastColumns[columnName].join("\n"), button);
       }
 
-      // Values only: the counts are pasted under headings that already exist in
-      // the spreadsheet, so a header cell would land in the wrong row
-      function copyThresholdColumn(index, button) {
-        const values = lastThresholdTable.rows.map((row) => row[index]);
+      // Values only: the numbers are pasted under headings that already exist
+      // in the spreadsheet, so a header cell would land in the wrong row
+      function copyTableColumn(table, index, button) {
+        const values = table.rows.map((row) => (row[index] === null ? "" : row[index]));
         return copyText(values.join("\n"), button);
       }
 

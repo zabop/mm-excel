@@ -23,11 +23,13 @@ A run that gives up writes {"error": "..."} to stderr and exits non-zero, so the
 stderr document parses whether the run succeeded or not.
 """
 
+import argparse
 import itertools
 import json
 import math
 import random
 import sys
+from typing import NoReturn
 
 # whole percent points, which is also the unit the table is written in -- integer
 # severities are what lets the mean come out exact instead of drifting over a few
@@ -37,7 +39,7 @@ POSSIBLE_PESSEV_VALUES = [
 ]  # fmt: skip
 
 
-def fail(message):
+def fail(message) -> NoReturn:
     """Give up with a stderr document that still parses as JSON.
 
     Every abandoned run leaves stderr holding an object rather than bare prose,
@@ -45,6 +47,17 @@ def fail(message):
     """
     print(json.dumps({"error": message}), file=sys.stderr)
     sys.exit(1)
+
+
+class JsonArgumentParser(argparse.ArgumentParser):
+    """argparse, but its own errors are JSON as well.
+
+    Bad arguments are reported by argparse itself, which would otherwise print
+    a usage block and leave stderr unparseable.
+    """
+
+    def error(self, message):
+        fail(f"could not read the arguments: {message}")
 
 
 def threshold_counts(pessev_i, threshold):
