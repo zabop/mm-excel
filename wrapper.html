@@ -562,12 +562,19 @@
             "severity_0",
             `severity_under_${limit}`,
             `severity_${limit}_and_over`,
+            "number_of_infected",
           ],
+          // The last column is the other three restated: it equals both
+          // severity_under + severity_and_over and sample_count - severity_0.
+          // It is read from infected_count rather than added up here, because
+          // that one is counted straight off pessev_i and cannot drift from the
+          // severities the threshold buckets were cut from.
           rows: summary.simulations.map((sim) => [
             String(sim.index),
             String(sim.threshold_counts.unaffected),
             String(sim.threshold_counts.below),
             String(sim.threshold_counts.at_or_above),
+            String(sim.infected_count),
           ]),
         };
       }
