@@ -3,6 +3,7 @@
 Usage:
     python pessev_wrapper.py --pesinc 5,10,25,5 --pessev 1,3,5,1
                              [--sample-count 200] [--pessev-spread 60]
+                             [--threshold 10]
 
     --pesinc         comma separated incidences as percentages, one per
                      simulation, e.g. 5,10,25,5
@@ -15,6 +16,9 @@ Usage:
     --pessev-spread  coefficient of variation of severity among infected
                      samples, as a percentage, default 60. One value, shared by
                      every simulation. See pessev.py for what the number means.
+    --threshold      severity threshold as a percentage. Optional, and only
+                     when it is given does the threshold table appear. One
+                     value, shared by every simulation.
 
 Writes a tab separated simulation / pesinc_i / pessev_i table to stdout and a
 summary per simulation to stderr, so
@@ -22,6 +26,10 @@ summary per simulation to stderr, so
 clean. The first column counts the simulations from one, so at the default
 sample count rows 1-200 belong to simulation 1, rows 201-400 to simulation 2,
 and so on. Nothing is seeded, so every invocation differs.
+
+With --threshold, a second tab separated table follows the per simulation
+summaries on stderr, counting each simulation's samples as unaffected, below
+the threshold, or at or above it.
 """
 
 import argparse
@@ -29,6 +37,10 @@ import math
 import sys
 
 from pessev import POSSIBLE_PESSEV_VALUES, calculate_pesinc_i, calculate_pessev_i
+
+# wrapper.html cuts the threshold table out of the captured stderr by splitting
+# on this exact line, so the two files have to keep the same spelling
+THRESHOLD_SUMMARY_MARKER = "=== threshold summary ==="
 
 
 def comma_separated_floats(text):
@@ -79,10 +91,19 @@ def parse_args(argv):
         help="coefficient of variation of severity, as a percentage "
         "(default: %(default)s)",
     )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        metavar="PCT",
+        help="severity threshold as a percentage; adds a table counting each "
+        "simulation's unaffected, below threshold and at or above threshold "
+        "samples (default: no such table)",
+    )
     return parser.parse_args(argv)
 
 
-def validate(pesinc_values, pessev_values, sample_count, spread):
+def validate(pesinc_values, pessev_values, sample_count, spread, threshold):
     """Reject bad input before a single row reaches stdout.
 
     Everything here is checked up front rather than per simulation as it is
@@ -99,6 +120,8 @@ def validate(pesinc_values, pessev_values, sample_count, spread):
         sys.exit("--sample-count must be at least 1")
     if spread < 0:
         sys.exit("--pessev-spread cannot be negative")
+    if threshold is not None and not 0 <= threshold <= 100:
+        sys.exit("--threshold is a severity percentage and must lie between 0 and 100")
 
     allowed = sorted({value for value in POSSIBLE_PESSEV_VALUES if value > 0})
     for index, (pesinc, pessev) in enumerate(
@@ -177,9 +200,52 @@ def print_summary(index, pesinc, pessev, sample_count, pessev_i):
         print(f"  {value:>3}% {infected.count(value):>4}", file=sys.stderr)
 
 
+def threshold_counts(pessev_i, threshold):
+    """One simulation's severities split into unaffected / below / at or above.
+
+    The three counts partition the samples, which is why the last one asks for
+    a severity above zero as well: a threshold of 0 would otherwise sweep the
+    unaffected samples into both the first bucket and the last.
+    """
+    unaffected = sum(1 for severity in pessev_i if severity == 0)
+    below = sum(1 for severity in pessev_i if 0 < severity < threshold)
+    at_or_above = sum(1 for severity in pessev_i if severity > 0 and severity >= threshold)
+    return unaffected, below, at_or_above
+
+
+def print_threshold_summary(counts_per_simulation, threshold):
+    """The threshold table, printed once after every simulation has run.
+
+    Tab separated under a fixed marker line, so wrapper.html can cut it out of
+    the stderr it captured and hand it to a spreadsheet in one piece. The
+    threshold travels in the column names rather than in the marker, which
+    leaves the marker a fixed string to split on and still labels the numbers
+    once they have been pasted somewhere else.
+    """
+    print(THRESHOLD_SUMMARY_MARKER, file=sys.stderr)
+    print(
+        f"simulation\tseverity_0\tseverity_under_{threshold:g}"
+        f"\tseverity_{threshold:g}_and_over",
+        file=sys.stderr,
+    )
+    for index, counts in enumerate(counts_per_simulation, start=1):
+        unaffected, below, at_or_above = counts
+        print(f"{index}\t{unaffected}\t{below}\t{at_or_above}", file=sys.stderr)
+
+
 def main(argv):
     args = parse_args(argv)
-    validate(args.pesinc, args.pessev, args.sample_count, args.pessev_spread)
+    validate(
+        args.pesinc,
+        args.pessev,
+        args.sample_count,
+        args.pessev_spread,
+        args.threshold,
+    )
+
+    # collected rather than printed inside the loop, so the table arrives as one
+    # block instead of a row wedged between each pair of summaries
+    counts_per_simulation = []
 
     print("simulation\tpesinc_i\tpessev_i")
     for index, (pesinc, pessev) in enumerate(zip(args.pesinc, args.pessev), start=1):
@@ -189,6 +255,11 @@ def main(argv):
         for incidence, severity in zip(pesinc_i, pessev_i):
             print(f"{index}\t{incidence}\t{severity}")
         print_summary(index, pesinc, pessev, args.sample_count, pessev_i)
+        if args.threshold is not None:
+            counts_per_simulation.append(threshold_counts(pessev_i, args.threshold))
+
+    if args.threshold is not None:
+        print_threshold_summary(counts_per_simulation, args.threshold)
 
 
 if __name__ == "__main__":

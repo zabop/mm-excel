@@ -28,6 +28,13 @@ jobs:
       - name: Sanity check pessev_wrapper.py
         run: python3 pessev_wrapper.py --pesinc 48,10 --pessev 20,3 > /dev/null
 
+      # --threshold is optional, so the check above already covers the page
+      # without it; this one covers the threshold table it adds to stderr
+      - name: Sanity check pessev_wrapper.py --threshold
+        run: |
+          python3 pessev_wrapper.py --pesinc 48,10 --pessev 20,3 --threshold 10 \
+            2>&1 >/dev/null | grep -q '^=== threshold summary ===$'
+
       # Stage only what the page needs, so the spreadsheets and the PDF in the
       # repo do not end up on the public site
       - name: Assemble site

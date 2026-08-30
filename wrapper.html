@@ -75,7 +75,7 @@
       }
       .grid {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1fr 1fr 1fr;
         gap: 20px;
       }
       .output-container {
@@ -161,6 +161,56 @@
         font-weight: bold;
         margin-top: 10px;
       }
+      /* Deliberately the opposite of the two dark output panes above it: a
+         light card with hairline rules, so the counts read as a table rather
+         than as more terminal output. */
+      .threshold-section {
+        margin-top: 30px;
+        background: #fff;
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        padding: 15px;
+      }
+      .threshold-header {
+        color: #0076ff;
+        font-weight: bold;
+        margin-bottom: 10px;
+      }
+      #thresholdTable {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 14px;
+      }
+      #thresholdTable th,
+      #thresholdTable td {
+        border-bottom: 1px solid #eaeaea;
+        padding: 8px 10px;
+        text-align: right;
+      }
+      /* the counts are the point, so they get the monospace and the weight;
+         the leading simulation number is a label and stays on the left */
+      #thresholdTable td {
+        font-family: monospace;
+      }
+      #thresholdTable th:first-child,
+      #thresholdTable td:first-child {
+        text-align: left;
+        font-family: inherit;
+        color: #888;
+      }
+      #thresholdTable th {
+        color: #555;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        border-bottom: 2px solid #eaeaea;
+      }
+      #thresholdTable tbody tr:last-child td {
+        border-bottom: none;
+      }
+      #thresholdCopyButtons {
+        margin-top: 12px;
+      }
     </style>
   </head>
   <body>
@@ -182,6 +232,19 @@
             step="any"
             min="0"
             value="60"
+            required
+          />
+        </div>
+        <div class="form-group">
+          <!-- a severity, so it shares the 0-100 range of the PESSEV column -->
+          <label for="threshold">THRESHOLD (Severity %, 0 - 100):</label>
+          <input
+            type="number"
+            id="threshold"
+            step="any"
+            min="0"
+            max="100"
+            value="10"
             required
           />
         </div>
@@ -228,6 +291,23 @@
       </div>
     </div>
 
+    <!-- The same numbers the stderr pane already holds, lifted out into a real
+         table: the pane is a scrolling wall of monospace, and these are the
+         rows that get read off the screen and pasted elsewhere. Hidden until a
+         run produces them. Head, body and buttons are all filled in from the
+         parsed table, because the two severity column names carry whatever
+         threshold was used. -->
+    <div id="thresholdSection" class="threshold-section" hidden>
+      <div class="threshold-header">🎯 Threshold table</div>
+      <table id="thresholdTable">
+        <thead>
+          <tr id="thresholdHead"></tr>
+        </thead>
+        <tbody id="thresholdBody"></tbody>
+      </table>
+      <div class="copy-buttons" id="thresholdCopyButtons"></div>
+    </div>
+
     <script type="text/javascript">
       let pyodideInstance = null;
       // Columns of the last run, parsed out of the captured stdout. Kept as
@@ -235,6 +315,16 @@
       // innerText turns the newlines into <br> elements, so the TSV rows cannot
       // be read back.
       let lastColumns = { pesinc_i: [], pessev_i: [] };
+      // The threshold table of the last run, cut out of the captured stderr and
+      // split into cells. Same reasoning as lastColumns: the stderr <pre> is
+      // not a usable source once innerText has turned its newlines into <br>
+      // elements. `headers` carries the column names as Python wrote them, two
+      // of which spell out the threshold that was used.
+      let lastThresholdTable = { headers: [], rows: [] };
+
+      // pessev_wrapper.py prints this line above the threshold table; the two
+      // spellings have to stay in step
+      const THRESHOLD_SUMMARY_MARKER = "=== threshold summary ===";
 
       // --- simulation rows ------------------------------------------------
 
@@ -332,6 +422,9 @@
         event.preventDefault();
 
         lastColumns = { pesinc_i: [], pessev_i: [] };
+        // hidden rather than left showing the previous run's counts, which a
+        // failed run would otherwise leave stranded under a fresh error message
+        renderThresholdTable({ headers: [], rows: [] });
         document.getElementById("stdoutView").innerText =
           "Processing calculation...";
         document.getElementById("stderrView").innerText =
@@ -346,6 +439,7 @@
         );
         const sampleCount = document.getElementById("sampleCount").value;
         const spread = document.getElementById("spread").value;
+        const threshold = document.getElementById("threshold").value;
 
         let stdoutBuffer = "";
         let stderrBuffer = "";
@@ -373,6 +467,8 @@
             sampleCount,
             "--pessev-spread",
             spread,
+            "--threshold",
+            threshold,
           ]);
 
           // Not indented: runPythonAsync hands the string straight to Python,
@@ -392,6 +488,7 @@
           );
 
           lastColumns = parseColumns(stdoutBuffer);
+          renderThresholdTable(parseThresholdSummary(stderrBuffer));
           document.getElementById("stdoutView").innerText =
             stdoutBuffer || "No output generated.";
           document.getElementById("stderrView").innerText =
@@ -418,9 +515,81 @@
         return columns;
       }
 
+      // Everything below the marker line, split on the tabs Python wrote: a
+      // header row and then one row per simulation. Comes back empty when the
+      // run failed before reaching the table, or when it ran without
+      // --threshold.
+      function parseThresholdSummary(text) {
+        const at = text.indexOf(THRESHOLD_SUMMARY_MARKER);
+        if (at === -1) return { headers: [], rows: [] };
+        const lines = text
+          .slice(at + THRESHOLD_SUMMARY_MARKER.length)
+          .trim()
+          .split("\n");
+        const [header, ...body] = lines;
+        return {
+          headers: header.split("\t"),
+          rows: body.map((line) => line.split("\t")),
+        };
+      }
+
+      // Rebuilds the whole section from the parsed table, buttons included: the
+      // two severity column names change with the threshold, so the labels
+      // cannot be written into the markup up front.
+      function renderThresholdTable(table) {
+        lastThresholdTable = table;
+
+        const section = document.getElementById("thresholdSection");
+        const head = document.getElementById("thresholdHead");
+        const body = document.getElementById("thresholdBody");
+        const buttons = document.getElementById("thresholdCopyButtons");
+        head.innerHTML = "";
+        body.innerHTML = "";
+        buttons.innerHTML = "";
+
+        section.hidden = table.rows.length === 0;
+        if (section.hidden) return;
+
+        for (const name of table.headers) {
+          const cell = document.createElement("th");
+          cell.innerText = name;
+          head.appendChild(cell);
+        }
+        for (const row of table.rows) {
+          const tr = document.createElement("tr");
+          for (const value of row) {
+            const cell = document.createElement("td");
+            cell.innerText = value;
+            tr.appendChild(cell);
+          }
+          body.appendChild(tr);
+        }
+
+        // column 0 is the simulation number, which labels the rows rather than
+        // being one of the counts, so it gets no button of its own
+        table.headers.slice(1).forEach((name, offset) => {
+          const index = offset + 1;
+          const button = document.createElement("button");
+          button.type = "button";
+          button.innerText = `Copy ${name}`;
+          button.onclick = () => copyThresholdColumn(index, button);
+          buttons.appendChild(button);
+        });
+      }
+
       // One value per line, so a paste lands in a single spreadsheet column
-      async function copyColumn(columnName, button) {
-        const values = lastColumns[columnName].join("\n");
+      function copyColumn(columnName, button) {
+        return copyText(lastColumns[columnName].join("\n"), button);
+      }
+
+      // Values only: the counts are pasted under headings that already exist in
+      // the spreadsheet, so a header cell would land in the wrong row
+      function copyThresholdColumn(index, button) {
+        const values = lastThresholdTable.rows.map((row) => row[index]);
+        return copyText(values.join("\n"), button);
+      }
+
+      async function copyText(values, button) {
         const originalLabel = button.dataset.label || button.innerText.trim();
         button.dataset.label = originalLabel;
 
