@@ -265,7 +265,7 @@
     <div class="output-container">
       <div>
         <div class="stdout-header">
-          📊 Data (stdout - JSON, whole percent points)
+          📊 Data (simulation / pesinc_i / pessev_i, whole percent points)
         </div>
         <pre id="stdoutView">Output data will appear here...</pre>
         <div class="copy-buttons">
@@ -480,8 +480,20 @@
           const summary = parseStream(stderrBuffer);
           lastColumns = collectColumns(data);
           renderThresholdTable(buildThresholdTable(summary));
-          showStream("stdoutView", stdoutBuffer, data, "No output generated.");
-          showStream("stderrView", stderrBuffer, summary, "No summary generated.");
+          showStream(
+            "stdoutView",
+            stdoutBuffer,
+            data,
+            formatDataColumns,
+            "No output generated.",
+          );
+          showStream(
+            "stderrView",
+            stderrBuffer,
+            summary,
+            (parsed) => JSON.stringify(parsed, null, 2),
+            "No summary generated.",
+          );
         } catch (error) {
           document.getElementById("stderrView").innerText =
             `Execution Interrupted:\n${error.message}`;
@@ -499,11 +511,28 @@
         }
       }
 
-      // Pretty printed when the stream parsed, verbatim when it did not
-      function showStream(viewId, text, parsed, emptyMessage) {
+      // Rendered by `format` when the stream parsed, verbatim when it did not,
+      // which is what puts a Python traceback on screen instead of swallowing it
+      function showStream(viewId, text, parsed, format, emptyMessage) {
         document.getElementById(viewId).innerText = parsed
-          ? JSON.stringify(parsed, null, 2)
+          ? format(parsed)
           : text || emptyMessage;
+      }
+
+      // The three columns the data pane shows, flattened out of the stdout
+      // document: one row per sample, carrying the simulation it belongs to.
+      // Tab separated rather than space padded, so a selection dragged out of
+      // the pane still pastes as three spreadsheet columns.
+      function formatDataColumns(data) {
+        const lines = ["simulation\tpesinc_i\tpessev_i"];
+        for (const sim of data?.simulations ?? []) {
+          for (let row = 0; row < sim.pesinc_i.length; row++) {
+            lines.push(
+              `${sim.index}\t${sim.pesinc_i[row]}\t${sim.pessev_i[row]}`,
+            );
+          }
+        }
+        return lines.join("\n");
       }
 
       // The simulations come back in the order the form listed them, so
