@@ -147,7 +147,7 @@ def main(argv):
         pessev = float(argv[2])
         sample_count = int(argv[3]) if len(argv) > 3 else 200
         spread = float(argv[4]) if len(argv) > 4 else 60.0
-        seed = int(argv[5]) if len(argv) > 5 else 20260828
+        seed = int(argv[5]) if len(argv) > 5 else None
     except ValueError as error:
         sys.exit(f"could not read the arguments: {error}")
 
@@ -167,7 +167,8 @@ def main(argv):
             f"percent points, so the mean cannot be matched"
         )
 
-    random.seed(a=seed)
+    if seed is not None:
+        random.seed(a=seed)
     pesinc_i = calculate_pesinc_i(sample_count, pesinc)
     try:
         pessev_i = calculate_pessev_i(pesinc_i, pessev, spread)
@@ -200,9 +201,7 @@ def main(argv):
         f"(target {pessev / pesinc * 100:.4f}%)",
         file=sys.stderr,
     )
-    print(
-        f"severity spread  : {min(infected)}% .. {max(infected)}%", file=sys.stderr
-    )
+    print(f"severity spread  : {min(infected)}% .. {max(infected)}%", file=sys.stderr)
     for value in sorted(set(infected)):
         print(f"  {value:>3}% {infected.count(value):>4}", file=sys.stderr)
 
