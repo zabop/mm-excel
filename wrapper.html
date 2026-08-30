@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MM GENERATOR - BATCH</title>
+    <!-- Load Pyodide WebAssembly Framework -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.28.3/full/pyodide.js"></script>
+    <style>
+      /* the page colour lives on <html>, because <body> is only 800px wide and
+         would leave the margins bare */
+      html {
+        background-color: #f9f9f9;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        max-width: 800px;
+        margin: 40px auto;
+        padding: 0 20px;
+        line-height: 1.6;
+        color: #333;
+      }
+      /* Tiled wallpaper on its own layer: opacity here fades only the photo,
+         whereas a translucent background-image would fade the text with it.
+         Fixed, so the tiles cover the viewport at any scroll position. */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        background-image: url("https://kep.cdn.indexvas.hu/1/0/5013/50138/501387/50138753_f77d2991e879c056d6eef88f0961cc96_wm.jpg");
+        background-repeat: repeat;
+        background-size: 240px auto; /* source is 805x1152, so ~343px tall */
+        opacity: 0.2;
+        pointer-events: none;
+      }
+      h1 {
+        border-bottom: 2px solid #eaeaea;
+        padding-bottom: 10px;
+        color: #222;
+      }
+      .form-group {
+        margin-bottom: 15px;
+        display: flex;
+        flex-direction: column;
+      }
+      label {
+        font-weight: bold;
+        margin-bottom: 5px;
+      }
+      input {
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+      }
+      button {
+        background-color: #0076ff;
+        color: white;
+        border: none;
+        padding: 12px 20px;
+        border-radius: 4px;
+        font-size: 16px;
+        cursor: pointer;
+        font-weight: bold;
+        margin-top: 10px;
+      }
+      button:hover {
+        background-color: #0060d6;
+      }
+      button:disabled {
+        background-color: #cccccc;
+        cursor: not-allowed;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+      }
+      .output-container {
+        margin-top: 30px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+      }
+      pre {
+        background: #282c34;
+        color: #abb2bf;
+        padding: 15px;
+        border-radius: 6px;
+        overflow-x: auto;
+        font-family: monospace;
+        font-size: 13px;
+        height: 350px;
+        border: 1px solid #181a1f;
+      }
+      .stdout-header {
+        color: #98c379;
+        font-weight: bold;
+        margin-bottom: 5px;
+      }
+      .stderr-header {
+        color: #e06c75;
+        font-weight: bold;
+        margin-bottom: 5px;
+      }
+      #status {
+        font-weight: bold;
+        color: #0076ff;
+        margin-bottom: 15px;
+      }
+      .copy-buttons {
+        display: flex;
+        gap: 10px;
+      }
+      .copy-buttons button {
+        font-size: 14px;
+        padding: 8px 14px;
+      }
+      /* One simulation per row: the two number fields share the width and the
+         add/remove buttons take only what they need at the end. */
+      .sim-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr auto auto;
+        gap: 10px;
+        margin-bottom: 10px;
+        align-items: start;
+      }
+      .row-btn {
+        margin-top: 0;
+        padding: 8px 0;
+        width: 40px;
+        font-size: 18px;
+        line-height: 1;
+      }
+      /* the column captions sit above the first row only, so the rows below it
+         stay compact -- same widths as .sim-row minus the button columns */
+      .sim-head {
+        display: grid;
+        grid-template-columns: 1fr 1fr auto auto;
+        gap: 10px;
+        font-weight: bold;
+        margin-bottom: 5px;
+      }
+      .sim-head span:nth-child(3) {
+        width: 90px;
+      }
+      .section-label {
+        font-weight: bold;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>PESINC / PESSEV Batch Generator</h1>
+    <div id="status">⏳ Initializing WebAssembly Python environment...</div>
+
+    <form id="paramForm" onsubmit="runGenerator(event)">
+      <div class="grid">
+        <div class="form-group">
+          <label for="sampleCount">SAMPLE_COUNT (Total subsamples):</label>
+          <input type="number" id="sampleCount" min="1" value="200" required />
+        </div>
+        <div class="form-group">
+          <!-- no max: a coefficient of variation is a ratio, so >100% is valid -->
+          <label for="spread">PESSEV_SPREAD (Coeff. of variation %):</label>
+          <input
+            type="number"
+            id="spread"
+            step="any"
+            min="0"
+            value="60"
+            required
+          />
+        </div>
+      </div>
+
+      <div class="section-label">Simulations</div>
+      <div class="sim-head">
+        <span>PESINC (Incidence %, 0 - 100)</span>
+        <span>PESSEV (Mean severity %, 0 - 100)</span>
+        <span></span>
+      </div>
+      <div id="simulationRows"></div>
+
+      <button type="submit" id="runBtn" disabled>Run Simulation</button>
+    </form>
+
+    <div class="output-container">
+      <div>
+        <div class="stdout-header">
+          📊 Data (stdout - TSV, whole percent points)
+        </div>
+        <pre id="stdoutView">Output data will appear here...</pre>
+        <div class="copy-buttons">
+          <button
+            type="button"
+            id="copyPesincBtn"
+            onclick="copyColumn('pesinc_i', this)"
+          >
+            Copy pesinc_i
+          </button>
+          <button
+            type="button"
+            id="copyPessevBtn"
+            onclick="copyColumn('pessev_i', this)"
+          >
+            Copy pessev_i
+          </button>
+        </div>
+      </div>
+      <div>
+        <div class="stderr-header">📝 Summary (stderr)</div>
+        <pre id="stderrView">Summary telemetry will appear here...</pre>
+      </div>
+    </div>
+
+    <script type="text/javascript">
+      let pyodideInstance = null;
+      // Columns of the last run, parsed out of the captured stdout. Kept as
+      // arrays because the stdout <pre> is not a usable source: assigning
+      // innerText turns the newlines into <br> elements, so the TSV rows cannot
+      // be read back.
+      let lastColumns = { pesinc_i: [], pessev_i: [] };
+
+      // --- simulation rows ------------------------------------------------
+
+      // `after` is the row the plus was clicked on, so a new pair appears
+      // directly beneath it rather than at the bottom of the list
+      function addSimulationRow(after, pesinc = "", pessev = "") {
+        const row = document.createElement("div");
+        row.className = "sim-row";
+        row.innerHTML = `
+          <input type="number" class="pesinc" step="any" min="0" max="100"
+                 value="${pesinc}" placeholder="e.g. 48" required />
+          <input type="number" class="pessev" step="any" min="0" max="100"
+                 value="${pessev}" placeholder="e.g. 20" required />
+          <button type="button" class="row-btn" title="Add a simulation below">+</button>
+          <button type="button" class="row-btn remove" title="Remove this simulation">−</button>
+        `;
+
+        const [addBtn, removeBtn] = row.querySelectorAll("button");
+        addBtn.onclick = () => addSimulationRow(row);
+        removeBtn.onclick = () => {
+          row.remove();
+          refreshRowControls();
+        };
+
+        const container = document.getElementById("simulationRows");
+        if (after) {
+          after.insertAdjacentElement("afterend", row);
+        } else {
+          container.appendChild(row);
+        }
+        refreshRowControls();
+      }
+
+      // The form must always hold at least one simulation, so the last
+      // remaining row cannot delete itself
+      function refreshRowControls() {
+        const rows = document.querySelectorAll("#simulationRows .sim-row");
+        rows.forEach((row) => {
+          row.querySelector(".remove").disabled = rows.length === 1;
+        });
+      }
+
+      addSimulationRow(null, "48", "20");
+
+      // --- python environment ---------------------------------------------
+
+      async function initEnvironment() {
+        try {
+          // 1. Fetch both scripts asynchronously. pessev_wrapper.py imports
+          //    pessev, so the imported module has to be on disk as well.
+          const [pessevSource, wrapperSource] = await Promise.all(
+            ["./pessev.py", "./pessev_wrapper.py"].map(async (path) => {
+              const response = await fetch(path);
+              if (!response.ok) throw new Error(`Could not find ${path} file.`);
+              return response.text();
+            }),
+          );
+
+          // 2. Load the WebAssembly interpreter
+          pyodideInstance = await loadPyodide();
+
+          // 3. Unlike index.html, the sources cannot just be exec'd into a dict
+          //    namespace: `from pessev import ...` needs a real importable
+          //    module, so both files go onto Pyodide's virtual filesystem and
+          //    are imported the ordinary way.
+          pyodideInstance.FS.writeFile("pessev.py", pessevSource);
+          pyodideInstance.FS.writeFile("pessev_wrapper.py", wrapperSource);
+          await pyodideInstance.runPythonAsync(
+            [
+              "import sys",
+              "sys.path.insert(0, '/home/pyodide')",
+              "import pessev_wrapper",
+            ].join("\n"),
+          );
+
+          document.getElementById("status").innerText =
+            "✅ System Ready! Loaded pessev_wrapper.py successfully.";
+          document.getElementById("status").style.color = "#28a745";
+          document.getElementById("runBtn").disabled = false;
+        } catch (err) {
+          document.getElementById("status").innerText =
+            `❌ Error: ${err.message}`;
+          document.getElementById("status").style.color = "#dc3545";
+          console.error(err);
+        }
+      }
+
+      // --- execution -------------------------------------------------------
+
+      async function runGenerator(event) {
+        event.preventDefault();
+
+        lastColumns = { pesinc_i: [], pessev_i: [] };
+        document.getElementById("stdoutView").innerText =
+          "Processing calculation...";
+        document.getElementById("stderrView").innerText =
+          "Processing calculation...";
+
+        const rows = [...document.querySelectorAll("#simulationRows .sim-row")];
+        const pesincValues = rows.map((row) => row.querySelector(".pesinc").value);
+        const pessevValues = rows.map((row) => row.querySelector(".pessev").value);
+        const sampleCount = document.getElementById("sampleCount").value;
+        const spread = document.getElementById("spread").value;
+
+        let stdoutBuffer = "";
+        let stderrBuffer = "";
+
+        pyodideInstance.setStdout({
+          batched: (text) => {
+            stdoutBuffer += text + "\n";
+          },
+        });
+        pyodideInstance.setStderr({
+          batched: (text) => {
+            stderrBuffer += text + "\n";
+          },
+        });
+
+        try {
+          // main() is called as main(sys.argv[1:]) in the script's entrypoint
+          // guard, so the list carries no program name
+          pyodideInstance.globals.set("argv", [
+            "--pesinc",
+            pesincValues.join(","),
+            "--pessev",
+            pessevValues.join(","),
+            "--sample-count",
+            sampleCount,
+            "--pessev-spread",
+            spread,
+          ]);
+
+          // Not indented: runPythonAsync hands the string straight to Python,
+          // so any leading whitespace is an IndentationError.
+          await pyodideInstance.runPythonAsync(
+            [
+              "import sys",
+              "try:",
+              "    pessev_wrapper.main([str(arg) for arg in argv])",
+              "except SystemExit as exit_request:",
+              "    # argparse prints its own usage and exits with an int, but",
+              "    # validate() exits with the message itself, which nothing",
+              "    # has written to stderr yet",
+              "    if isinstance(exit_request.code, str):",
+              "        print(exit_request.code, file=sys.stderr)",
+            ].join("\n"),
+          );
+
+          lastColumns = parseColumns(stdoutBuffer);
+          document.getElementById("stdoutView").innerText =
+            stdoutBuffer || "No output generated.";
+          document.getElementById("stderrView").innerText =
+            stderrBuffer || "No summary generated.";
+        } catch (error) {
+          document.getElementById("stderrView").innerText =
+            `Execution Interrupted:\n${error.message}`;
+        }
+      }
+
+      // main() returns nothing, so the columns come from the buffered stdout
+      // rather than from a return value like index.html uses. Reading the
+      // buffer, not the DOM, keeps the newlines intact.
+      function parseColumns(text) {
+        const columns = { pesinc_i: [], pessev_i: [] };
+        const lines = text.split("\n");
+        for (const line of lines.slice(1)) {
+          // simulation \t pesinc_i \t pessev_i
+          const fields = line.split("\t");
+          if (fields.length !== 3) continue;
+          columns.pesinc_i.push(fields[1]);
+          columns.pessev_i.push(fields[2]);
+        }
+        return columns;
+      }
+
+      // One value per line, so a paste lands in a single spreadsheet column
+      async function copyColumn(columnName, button) {
+        const values = lastColumns[columnName].join("\n");
+        const originalLabel = button.dataset.label || button.innerText.trim();
+        button.dataset.label = originalLabel;
+
+        if (!values) {
+          flashButton(button, "Run the simulation first");
+          return;
+        }
+
+        try {
+          await navigator.clipboard.writeText(values);
+          flashButton(button, "Copied!");
+        } catch (error) {
+          // Clipboard API is unavailable outside secure contexts
+          const scratch = document.createElement("textarea");
+          scratch.value = values;
+          document.body.appendChild(scratch);
+          scratch.select();
+          const copied = document.execCommand("copy");
+          document.body.removeChild(scratch);
+          flashButton(button, copied ? "Copied!" : "Copy failed");
+        }
+      }
+
+      function flashButton(button, message) {
+        button.innerText = message;
+        setTimeout(() => {
+          button.innerText = button.dataset.label;
+        }, 1200);
+      }
+
+      initEnvironment();
+    </script>
+  </body>
+</html>

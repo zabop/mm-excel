@@ -25,12 +25,15 @@ jobs:
       - name: Sanity check pessev.py
         run: python3 pessev.py 48 20 200 60 20260828 > /dev/null
 
+      - name: Sanity check pessev_wrapper.py
+        run: python3 pessev_wrapper.py --pesinc 48,10 --pessev 20,3 > /dev/null
+
       # Stage only what the page needs, so the spreadsheets and the PDF in the
       # repo do not end up on the public site
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp index.html pessev.py _site/
+          cp index.html pessev.py wrapper.html pessev_wrapper.py _site/
 
       # enablement: turns Pages on (source = GitHub Actions) the first time this
       # runs, instead of failing with "Get Pages site failed"
